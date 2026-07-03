@@ -233,3 +233,13 @@ export const GlobeIcon = (p: IconProps): React.JSX.Element => (
     <path d="M2 8h12M8 2c-1.8 1.7-2.6 3.8-2.6 6S6.2 12.3 8 14c1.8-1.7 2.6-3.8 2.6-6S9.8 3.7 8 2z" />
   </Icon>
 )
+
+/** Lucide's "settings" icon (lucide.dev/icons/settings), rescaled from its native 24x24 grid onto ours. */
+export const GearIcon = (p: IconProps): React.JSX.Element => (
+  <Icon {...p}>
+    <g transform="translate(8 8) scale(0.6667) translate(-12 -12)">
+      <path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915" />
+      <circle cx="12" cy="12" r="3" />
+    </g>
+  </Icon>
+)

@@ -1,16 +1,17 @@
 import { useEffect, useRef, useState } from 'react'
 import type { AspectMode, GameState, ProjectInfo } from '../../../shared/types'
+import logo from '../assets/logo.png'
+import { AdvancedToggle } from './AdvancedToggle'
 import {
   AspectAnyIcon,
   CheckIcon,
   ChevronIcon,
+  GearIcon,
   HomeIcon,
   MonitorIcon,
   PhoneLandscapeIcon,
   PhonePortraitIcon,
-  PlayIcon,
-  ShareIcon,
-  StopIcon
+  ShareIcon
 } from './Icons'
 
 interface Props {
@@ -22,13 +23,36 @@ interface Props {
   onStop: () => void
   onHome: () => void
   onExport: () => void
+  onOpenSettings: () => void
+  advancedMode: boolean
+  onToggleAdvancedMode: (value: boolean) => void
 }
 
-const ASPECT_OPTIONS: { mode: AspectMode; label: string; icon: React.JSX.Element }[] = [
-  { mode: 'any', label: 'Any Aspect Ratio', icon: <AspectAnyIcon size={14} /> },
-  { mode: 'desktop', label: 'Desktop, TV, Standard 16:9', icon: <MonitorIcon size={14} /> },
-  { mode: 'mobile-portrait', label: 'Mobile Vertical', icon: <PhonePortraitIcon size={14} /> },
-  { mode: 'mobile-landscape', label: 'Mobile Horizontal', icon: <PhoneLandscapeIcon size={14} /> }
+const ASPECT_OPTIONS: {
+  mode: AspectMode
+  label: string
+  shortLabel: string
+  icon: React.JSX.Element
+}[] = [
+  { mode: 'any', label: 'Any Aspect Ratio', shortLabel: 'Any', icon: <AspectAnyIcon size={14} /> },
+  {
+    mode: 'desktop',
+    label: 'Desktop, TV, Standard 16:9',
+    shortLabel: 'Desktop',
+    icon: <MonitorIcon size={14} />
+  },
+  {
+    mode: 'mobile-portrait',
+    label: 'Mobile Vertical',
+    shortLabel: 'Portrait',
+    icon: <PhonePortraitIcon size={14} />
+  },
+  {
+    mode: 'mobile-landscape',
+    label: 'Mobile Horizontal',
+    shortLabel: 'Landscape',
+    icon: <PhoneLandscapeIcon size={14} />
+  }
 ]
 
 /** Run/Stop with an aspect-ratio picker on the caret — usable while running too. */
@@ -42,6 +66,8 @@ function RunControls({
   const [open, setOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
   const { status } = gameState
+  const btnKind = status === 'stopped' ? 'btn-play' : 'btn-stop'
+  const currentAspect = ASPECT_OPTIONS.find((o) => o.mode === aspect)
 
   useEffect(() => {
     if (!open) return
@@ -54,24 +80,26 @@ function RunControls({
 
   return (
     <div className="run-split" ref={menuRef}>
-      {status === 'stopped' ? (
-        <button className="btn btn-play run-main" onClick={onPlay}>
-          <PlayIcon size={12} /> Run
-        </button>
-      ) : (
-        <button className="btn btn-stop run-main" onClick={onStop}>
-          <StopIcon size={12} /> {status === 'starting' ? 'Cancel' : 'Stop'}
-        </button>
-      )}
       <button
-        className={status === 'stopped' ? 'btn btn-play run-caret' : 'btn btn-stop run-caret'}
+        className={`btn ${btnKind} run-caret`}
         title="Game preview aspect ratio"
         onClick={() => setOpen((v) => !v)}
       >
+        {currentAspect?.icon}
+        <span className="run-caret-label">{currentAspect?.shortLabel}</span>
         <span className="caret-down">
           <ChevronIcon size={10} />
         </span>
       </button>
+      {status === 'stopped' ? (
+        <button className="btn btn-play run-main" onClick={onPlay}>
+          Run
+        </button>
+      ) : (
+        <button className="btn btn-stop run-main" onClick={onStop}>
+          {status === 'starting' ? 'Cancel' : 'Stop'}
+        </button>
+      )}
       {open && (
         <div className="run-menu">
           <div className="run-menu-title">Preview aspect ratio</div>
@@ -99,7 +127,19 @@ function RunControls({
   )
 }
 
-export function TitleBar({ project, gameState, aspect, onSetAspect, onPlay, onStop, onHome, onExport }: Props): React.JSX.Element {
+export function TitleBar({
+  project,
+  gameState,
+  aspect,
+  onSetAspect,
+  onPlay,
+  onStop,
+  onHome,
+  onExport,
+  onOpenSettings,
+  advancedMode,
+  onToggleAdvancedMode
+}: Props): React.JSX.Element {
   const { status } = gameState
   return (
     <header className="titlebar">
@@ -110,7 +150,7 @@ export function TitleBar({ project, gameState, aspect, onSetAspect, onPlay, onSt
           </button>
         )}
         <span className="brand">
-          <span className="brand-mark">◆</span> OpenGenie
+          <img src={logo} alt="" className="brand-mark-img" /> OpenGenie
         </span>
         {project && (
           <>
@@ -132,6 +172,16 @@ export function TitleBar({ project, gameState, aspect, onSetAspect, onPlay, onSt
             <span className={status === 'running' ? 'status-dot running' : 'status-dot starting'} />
             {status !== 'running' ? 'Starting…' : gameState.mode === 'test' ? 'AI testing' : 'Running'}
           </span>
+        )}
+        {project && <AdvancedToggle value={advancedMode} onChange={onToggleAdvancedMode} />}
+        {project && (
+          <button
+            className="icon-btn"
+            title="AI settings (provider, model, 3D asset generation)"
+            onClick={onOpenSettings}
+          >
+            <GearIcon size={14} />
+          </button>
         )}
         {project && (
           <button className="btn btn-ghost btn-sm" title="Export your game" onClick={onExport}>

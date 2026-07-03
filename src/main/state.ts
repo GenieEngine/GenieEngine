@@ -7,6 +7,8 @@ interface SettingsFile {
   godotPath?: string
   opencodePath?: string
   recentProjects: string[]
+  /** Whether the ECS viewer, files/git sidebars and console output are shown. */
+  advancedMode?: boolean
 }
 
 let settings: SettingsFile = { recentProjects: [] }
@@ -38,6 +40,15 @@ export function getSettings(): SettingsFile {
 
 export function setGodotPath(path: string): void {
   settings.godotPath = path
+  saveSettings()
+}
+
+export function getAdvancedMode(): boolean {
+  return settings.advancedMode ?? false
+}
+
+export function setAdvancedMode(value: boolean): void {
+  settings.advancedMode = value
   saveSettings()
 }
 

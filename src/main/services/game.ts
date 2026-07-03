@@ -141,6 +141,15 @@ export function setStageRect(rect: StageRect): void {
   }
 }
 
+/**
+ * Hide/show the embedded game layer. The OS composites it above the web
+ * contents, so the renderer can't cover it with DOM — it asks us to hide it
+ * while another center tab (e.g. the ECS viewer) occupies the stage.
+ */
+export function setGameLayerVisible(visible: boolean): void {
+  if (layerAttached) layerhost()?.setVisible(visible)
+}
+
 function currentDisplayState(win: BrowserWindow): { scale: number; dpi: number; displayId: number } {
   const display = screen.getDisplayMatching(win.getBounds())
   return {

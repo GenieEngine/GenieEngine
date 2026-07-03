@@ -11,6 +11,7 @@ interface Props {
   project: ProjectInfo
   width: number
   opencodeAvailable: boolean
+  advancedMode: boolean
 }
 
 const TABS: { id: Tab; label: string; icon: React.JSX.Element }[] = [
@@ -23,7 +24,7 @@ const TABS: { id: Tab; label: string; icon: React.JSX.Element }[] = [
  * The right-hand workspace sidebar. All three panels stay mounted (hidden via
  * CSS) so chat history, expanded folders and git state survive tab switches.
  */
-export function Workspace({ project, width, opencodeAvailable }: Props): React.JSX.Element {
+export function Workspace({ project, width, opencodeAvailable, advancedMode }: Props): React.JSX.Element {
   const [tab, setTab] = useState<Tab>('chat')
   // Bumped when the AI finishes work or the window refocuses, so the files
   // and git panels refresh to reflect changes made outside the UI.
@@ -42,27 +43,29 @@ export function Workspace({ project, width, opencodeAvailable }: Props): React.J
 
   return (
     <aside className="workspace" style={{ width }}>
-      <nav className="tabbar">
-        {TABS.map((t) => (
-          <button
-            key={t.id}
-            className={tab === t.id ? 'tab active' : 'tab'}
-            onClick={() => setTab(t.id)}
-          >
-            {t.icon}
-            <span className="tab-label">{t.label}</span>
-          </button>
-        ))}
-      </nav>
+      {advancedMode && (
+        <nav className="tabbar">
+          {TABS.map((t) => (
+            <button
+              key={t.id}
+              className={tab === t.id ? 'tab active' : 'tab'}
+              onClick={() => setTab(t.id)}
+            >
+              {t.icon}
+              <span className="tab-label">{t.label}</span>
+            </button>
+          ))}
+        </nav>
+      )}
       <div className="workspace-body">
-        <div className="panel" style={{ display: tab === 'chat' ? 'flex' : 'none' }}>
+        <div className="panel" style={{ display: !advancedMode || tab === 'chat' ? 'flex' : 'none' }}>
           <ChatPanel opencodeAvailable={opencodeAvailable} onAssistantDone={bump} />
         </div>
-        <div className="panel" style={{ display: tab === 'files' ? 'flex' : 'none' }}>
+        <div className="panel" style={{ display: advancedMode && tab === 'files' ? 'flex' : 'none' }}>
           <FilesPanel project={project} refreshToken={workVersion} />
         </div>
-        <div className="panel" style={{ display: tab === 'git' ? 'flex' : 'none' }}>
-          <GitPanel active={tab === 'git'} refreshToken={workVersion} />
+        <div className="panel" style={{ display: advancedMode && tab === 'git' ? 'flex' : 'none' }}>
+          <GitPanel active={advancedMode && tab === 'git'} refreshToken={workVersion} />
         </div>
       </div>
     </aside>

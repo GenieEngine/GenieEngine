@@ -1,10 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { AspectMode, GameState, InitialState, ProjectInfo } from '../../shared/types'
+import type { AspectMode, GameState, InitialState, ProjectInfo, SetupStatus } from '../../shared/types'
+import { EcsPanel } from './components/EcsPanel'
 import { ExportModal } from './components/ExportModal'
 import { GameView } from './components/GameView'
+import { SetupOverlay } from './components/SetupOverlay'
 import { TitleBar } from './components/TitleBar'
 import { Welcome } from './components/Welcome'
 import { Workspace } from './components/Workspace'
+
+/** Which panel occupies the center pane. */
+type CenterView = 'game' | 'ecs'
 
 const SIDEBAR_WIDTH_KEY = 'opengenie:sidebarWidth'
 const ASPECT_KEY = 'opengenie:aspect'
@@ -34,6 +39,48 @@ export function App(): React.JSX.Element {
   }, [])
 
   const [exportOpen, setExportOpen] = useState(false)
+  const [centerView, setCenterView] = useState<CenterView>('game')
+
+  // Advanced mode gates the ECS viewer, files/git sidebars and console
+  // output. Persisted in the main-process settings file (not localStorage)
+  // since it applies on the home page too, before any project is open.
+  const [advancedMode, setAdvancedModeState] = useState(false)
+  const setAdvancedMode = useCallback((value: boolean) => {
+    setAdvancedModeState(value)
+    void window.api.setAdvancedMode(value)
+  }, [])
+  // Dropping out of advanced mode while the ECS tab is open falls back to
+  // the game view, since the tab that opened it just disappeared.
+  useEffect(() => {
+    if (!advancedMode) setCenterView('game')
+  }, [advancedMode])
+
+  // AI provider setup: fetched app-wide (not project-scoped) so the settings
+  // gear works from both the title bar and the welcome screen. Re-checked on
+  // window focus so running `opencode auth login` externally, or connecting
+  // elsewhere, clears the overlay without a restart.
+  const [setup, setSetup] = useState<SetupStatus | null>(null)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  useEffect(() => {
+    const check = (): void => {
+      void window.api.getSetupStatus().then((r) => {
+        if (r.ok) setSetup(r.data)
+      })
+    }
+    check()
+    window.addEventListener('focus', check)
+    return () => window.removeEventListener('focus', check)
+  }, [])
+  const opencodeAvailable = opencodePath !== null
+  // Gates chat until an API key is connected — only forced once a project is
+  // open, since that's the earliest point the assistant is actually used.
+  const needsSetup = project !== null && opencodeAvailable && setup !== null && !setup.configured
+
+  // The embedded game renders as a native layer the OS composites above the
+  // web contents — DOM can't cover it, so hide it while the ECS tab is open.
+  useEffect(() => {
+    window.api.setGameLayerVisible(centerView === 'game')
+  }, [centerView])
 
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     const saved = Number(localStorage.getItem(SIDEBAR_WIDTH_KEY))
@@ -48,6 +95,7 @@ export function App(): React.JSX.Element {
         setRecents(state.recentProjects)
         setGodotPath(state.godotPath)
         setOpencodePath(state.opencodePath)
+        setAdvancedModeState(state.advancedMode)
       }
       setBooted(true)
     })
@@ -59,6 +107,7 @@ export function App(): React.JSX.Element {
     setProject(opened)
     setGameError(null)
     setGameState({ status: 'stopped' })
+    setCenterView('game')
   }, [])
 
   const goHome = useCallback(async () => {
@@ -68,10 +117,13 @@ export function App(): React.JSX.Element {
     setProject(null)
     setGameState({ status: 'stopped' })
     setGameError(null)
+    setCenterView('game')
   }, [])
 
   const play = useCallback(async () => {
     setGameError(null)
+    // Always show the game the user just started.
+    setCenterView('game')
     const result = await window.api.playGame()
     if (!result.ok) setGameError(result.error)
   }, [])
@@ -129,30 +181,71 @@ export function App(): React.JSX.Element {
         onStop={stop}
         onHome={goHome}
         onExport={() => setExportOpen(true)}
+        onOpenSettings={() => setSettingsOpen(true)}
+        advancedMode={advancedMode}
+        onToggleAdvancedMode={setAdvancedMode}
       />
       {exportOpen && project && <ExportModal projectName={project.name} onClose={() => setExportOpen(false)} />}
+      {(needsSetup || settingsOpen) && setup && (
+        <SetupOverlay
+          status={setup}
+          onConfigured={setSetup}
+          onClose={needsSetup ? undefined : () => setSettingsOpen(false)}
+        />
+      )}
       {project ? (
         <div className="content-row">
-          <GameView
-            state={gameState}
-            error={gameError}
-            godotPath={godotPath}
-            aspect={aspect}
-            onPlay={play}
-            onStop={stop}
-            onLocateGodot={locateGodot}
-            onDismissError={() => setGameError(null)}
-          />
+          <div className="center-pane">
+            {advancedMode && (
+              <div className="center-tabs">
+                <button
+                  className={centerView === 'game' ? 'center-tab active' : 'center-tab'}
+                  onClick={() => setCenterView('game')}
+                >
+                  Game
+                </button>
+                <button
+                  className={centerView === 'ecs' ? 'center-tab active' : 'center-tab'}
+                  onClick={() => setCenterView('ecs')}
+                >
+                  ECS
+                </button>
+              </div>
+            )}
+            {/* GameView stays mounted while hidden so the run, its console
+                output and the input overlay survive tab switches. */}
+            <div className="center-body" style={{ display: !advancedMode || centerView === 'game' ? undefined : 'none' }}>
+              <GameView
+                state={gameState}
+                error={gameError}
+                godotPath={godotPath}
+                aspect={aspect}
+                onPlay={play}
+                onStop={stop}
+                onLocateGodot={locateGodot}
+                onDismissError={() => setGameError(null)}
+                advancedMode={advancedMode}
+              />
+            </div>
+            {advancedMode && centerView === 'ecs' && <EcsPanel key={project.path} />}
+          </div>
           <div className="divider" onMouseDown={onDividerMouseDown} />
           <Workspace
             key={project.path}
             project={project}
             width={sidebarWidth}
-            opencodeAvailable={opencodePath !== null}
+            opencodeAvailable={opencodeAvailable}
+            advancedMode={advancedMode}
           />
         </div>
       ) : (
-        <Welcome recents={recents} onProjectOpened={handleProjectOpened} />
+        <Welcome
+          recents={recents}
+          onProjectOpened={handleProjectOpened}
+          onOpenSettings={() => setSettingsOpen(true)}
+          advancedMode={advancedMode}
+          onToggleAdvancedMode={setAdvancedMode}
+        />
       )}
     </div>
   )

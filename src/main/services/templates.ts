@@ -72,7 +72,16 @@ text = "${sanitize(name)} — built with OpenGenie. Ask the assistant to make a 
 
 export function mainGd(name: string): string {
   // GDScript uses tab indentation by convention (Godot's default).
+  // The opengenie header block matches the format mandated in agentsMd() —
+  // the scaffold must itself comply so the AI sees a live example (and so a
+  // future UI parser finds a header in every file, including this one).
   return [
+    '#=== opengenie ===',
+    '# kind: other',
+    '# name: Main',
+    '# summary: Entry scene script — instantiates entities and hosts the systems.',
+    '# uses: none',
+    '#=== /opengenie ===',
     'extends Node2D',
     '',
     '',
@@ -104,6 +113,11 @@ exports/
 /**
  * AGENTS.md is picked up automatically by OpenCode (and other coding agents),
  * so freshly created games come with the context the AI needs to work well.
+ *
+ * The "File headers" section below is load-bearing: it defines the exact
+ * comment-block format ("#=== opengenie ===" … keys … "#=== /opengenie ===")
+ * that a future OpenGenie UI feature will parse to display the project's
+ * structure. Change the format here and that parser in lockstep.
  */
 export function agentsMd(name: string): string {
   return `# ${sanitize(name)}
@@ -118,6 +132,119 @@ This is a **Godot 4** game project created with **OpenGenie**, an AI-powered gam
 - The user runs the game through OpenGenie's Run button, which runs the full native engine
   embedded in the app — the project must always launch cleanly and without script errors.
 - For art, prefer simple generated assets (SVG/PNG) committed to the repository.
+- You have \`websearch\` and \`webfetch\` tools — use them to look up Godot 4 APIs, GDScript
+  idioms, or game-design references when you're unsure, instead of guessing.
+
+## Architecture — Entity Component System (required)
+
+Structure ALL game code as ECS, mapped onto Godot like this:
+
+- **Components — \`components/c_*.gd\`** — pure data. Extends \`Node\`; \`@export\` data
+  fields, signals, and trivial accessors only — no game logic. In \`_ready\` the component
+  adds itself to a group named after its file (\`c_health.gd\` → group \`"c_health"\`) so
+  systems can find it.
+- **Entities — \`entities/e_*.tscn\` (with an \`entities/e_*.gd\` script)** — scenes that
+  compose components as child nodes. An entity script only wires its own components
+  together; behavior belongs in systems.
+- **Systems — \`systems/s_*.gd\`** — all game logic. Extends \`Node\`, attached under the
+  main scene (or an autoload); each frame it processes the members of the component groups
+  it cares about (\`get_tree().get_nodes_in_group("c_...")\`).
+
+Rules:
+
+- Every gameplay feature = component(s) for its data + a system for its behavior + entities
+  composed from components. Never put gameplay logic in an entity or component script.
+- Use exactly the \`e_\`, \`c_\`, \`s_\` file prefixes, each kind in its folder (create the
+  folders on first use). Non-ECS code (menus, HUD, math helpers, shaders) lives outside
+  those three folders — e.g. \`ui/\` or \`util/\`.
+- \`main.tscn\` stays the entry scene: it instantiates entities and hosts the systems.
+
+## Art & 3D assets
+
+All art lives under \`assets/\`, in sub-folders that mirror the ECS structure — an asset
+sits under the same category as the code that owns it:
+
+- \`assets/entities/<entity-id>/\` — art for one entity (e.g. \`assets/entities/e_player/\`).
+- \`assets/ui/\` — HUD icons, menu art, fonts.
+- \`assets/shared/\` — pieces several entities reuse (tilesets, common materials, props).
+
+Keep this layout for ALL assets, hand-made or generated. Never scatter art in the
+project root or next to scripts.
+
+### Generating 2D art (\`generate_2d_asset\`)
+
+If the \`generate_2d_asset\` tool is available (server \`opengenie\` — the user enables it
+by adding an OpenAI API key in the AI settings panel), you can generate 2D art:
+
+- Output is fixed: one 1024×1024 PNG with a TRANSPARENT background, medium quality —
+  ideal for sprites, icons, items and UI elements. Godot auto-imports it as a texture.
+- One subject per call. Prompt like an artist brief: subject, colors/materials, art
+  style, and the view angle the game needs (e.g. "side view, pixel-art style" for a
+  platformer sprite, "top-down" for a shooter, "flat vector icon" for UI).
+- \`folder\` + \`name\` decide where it lands, mirroring the ECS layout exactly like 3D
+  assets: \`folder: "entities/e_player", name: "player-sprite"\`
+  → \`assets/entities/e_player/player-sprite/\`.
+
+### Generating 3D models (\`generate_3d_asset\`)
+
+If the \`generate_3d_asset\` tool is available (server \`opengenie\` — the user enables it
+by adding Tencent HY 3D credentials in the AI settings panel), you can generate real,
+textured 3D models:
+
+- One object per call. Prompt like an artist brief: subject, shape, colors/materials,
+  style — e.g. "a small red rocket ship, rounded retro style, glossy paint, cartoon".
+- \`folder\` + \`name\` decide where it lands: \`folder: "entities/e_player", name: "rocket"\`
+  → \`assets/entities/e_player/rocket/\`. Match the folder to the owning ECS file.
+- Keep \`face_count\` modest (default 60000) — this is a game, not a render farm. Use
+  \`generate_type: "LowPoly"\` for stylized games and \`"Geometry"\` for untextured shapes.
+- Calls take 1–5 minutes and return a preview image — LOOK at it; if the model is wrong,
+  refine the prompt and regenerate rather than shipping a bad asset.
+- Godot auto-imports the saved \`.obj\`/\`.glb\` under \`res://\` — instance it in the
+  entity's scene.
+
+### Asset previews & user feedback
+
+Every generated asset's preview is shown to the user in the chat with a "Request
+changes" button. When the user gives feedback on an asset (e.g. 'Change the
+"rocket" asset (assets/entities/e_player/rocket): make it blue'):
+
+- Regenerate with the SAME \`folder\` and \`name\` so the new files replace the old ones —
+  scenes referencing the asset keep working. Never create "-v2" copies.
+- Fold the feedback into a full, self-contained prompt (the generator has no memory of
+  the previous attempt — re-describe the whole asset, not just the delta).
+- Check the returned preview against the user's feedback before reporting back.
+
+If a generation tool is NOT available, don't ask the user for it or fake a call — build
+placeholder art instead (SVG/PNG sprites, Godot primitive meshes), organized in the same
+\`assets/\` layout.
+
+## File headers (required — OpenGenie parses these)
+
+Start EVERY code file you create or edit with this comment block, before anything else
+(before \`extends\`). OpenGenie parses it mechanically to show the project's structure in
+the UI, so the format is exact: same keys, same order, one \`key: value\` per line, using
+the file type's line-comment prefix (\`#\` in GDScript, \`//\` in shaders).
+
+Example for \`components/c_health.gd\`:
+
+\`\`\`gdscript
+#=== opengenie ===
+# kind: component
+# name: Health
+# summary: Hit points with a died signal emitted when hp reaches 0.
+# uses: none
+#=== /opengenie ===
+\`\`\`
+
+- \`kind\` — one of \`entity | component | system | autoload | ui | util | shader | other\`.
+- \`name\` — short display name in PascalCase words.
+- \`summary\` — one line, plain language, under 120 characters; shown to the user in the UI.
+- \`uses\` — comma-separated \`c_*\` component files this file composes (entities) or
+  queries (systems); \`none\` if none.
+- Keep the header up to date whenever the file's purpose changes; never reorder, rename,
+  or reformat the keys.
+- Scene files (.tscn) cannot hold comments — the entity's \`e_*.gd\` script header covers
+  the entity.
 
 ## Testing your work
 

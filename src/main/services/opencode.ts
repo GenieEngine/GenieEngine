@@ -183,7 +183,9 @@ async function ensureServer(projectPath: string): Promise<OpencodeServer> {
     cwd: projectPath,
     // PWD must match cwd — OpenCode trusts the logical PWD for its project
     // directory (see the run-mode bug this fixed in git history).
-    env: { ...process.env, PWD: projectPath, NO_COLOR: '1' },
+    // OPENCODE_ENABLE_EXA registers the websearch tool (hosted Exa/Parallel
+    // search, no API key needed) — without it, OpenCode only offers webfetch.
+    env: { ...process.env, PWD: projectPath, NO_COLOR: '1', OPENCODE_ENABLE_EXA: '1' },
     stdio: ['ignore', 'pipe', 'pipe']
   })
 

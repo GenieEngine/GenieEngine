@@ -1,9 +1,8 @@
 import DOMPurify from 'dompurify'
 import { marked } from 'marked'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { ChatAttachment, ChatPartUpdate, ChatToolStatus, SetupStatus } from '../../../shared/types'
+import type { AssetPreview, ChatAttachment, ChatPartUpdate, ChatToolStatus } from '../../../shared/types'
 import { FileIcon, PlusIcon, SearchIcon, SendIcon, SparkIcon, StopIcon, TerminalIcon, XIcon } from './Icons'
-import { SetupOverlay } from './SetupOverlay'
 
 marked.setOptions({ gfm: true, breaks: true })
 
@@ -15,10 +14,12 @@ function Markdown({ source }: { source: string }): React.JSX.Element {
 
 interface AssistantPart {
   id: string
-  kind: 'text' | 'reasoning' | 'tool' | 'image'
+  kind: 'text' | 'reasoning' | 'tool' | 'image' | 'asset'
   text: string
   tool?: { name: string; status: ChatToolStatus; title?: string }
   dataUrl?: string
+  /** For kind 'asset': the generated 2D/3D asset preview the user can react to. */
+  asset?: AssetPreview
 }
 
 interface ChatMessage {
@@ -109,7 +110,15 @@ function ToolChip({ part }: { part: AssistantPart }): React.JSX.Element {
  * Renders one assistant message as flowing content (no bubble): markdown
  * text, compact tool-activity rows, live test screenshots.
  */
-function AssistantMessage({ msg, isFirst }: { msg: ChatMessage; isFirst: boolean }): React.JSX.Element {
+function AssistantMessage({
+  msg,
+  isFirst,
+  onAssetFeedback
+}: {
+  msg: ChatMessage
+  isFirst: boolean
+  onAssetFeedback: (asset: AssetPreview) => void
+}): React.JSX.Element {
   const parts = msg.parts ?? []
   const last = parts[parts.length - 1]
 
@@ -138,6 +147,25 @@ function AssistantMessage({ msg, isFirst }: { msg: ChatMessage; isFirst: boolean
       blocks.push(<Markdown key={part.id} source={part.text} />)
     } else if (part.kind === 'image' && part.dataUrl) {
       blocks.push(<img key={part.id} className="chat-shot" src={part.dataUrl} alt="Game screenshot from test run" />)
+    } else if (part.kind === 'asset' && part.asset) {
+      const asset = part.asset
+      blocks.push(
+        <div key={part.id} className="asset-card">
+          <img className="asset-card-img" src={asset.dataUrl} alt={`Generated ${asset.kind} asset: ${asset.label}`} />
+          <div className="asset-card-meta">
+            <span className={`asset-kind-badge kind-${asset.kind}`}>{asset.kind === '3d' ? '3D' : '2D'}</span>
+            <span className="asset-card-name">{asset.label}</span>
+            <span className="asset-card-path">{asset.path}</span>
+            <button
+              className="btn btn-sm btn-ghost asset-feedback-btn"
+              title="Describe what to change — the assistant will regenerate this asset"
+              onClick={() => onAssetFeedback(asset)}
+            >
+              Request changes
+            </button>
+          </div>
+        </div>
+      )
     } else if (part.kind === 'reasoning' && msg.streaming && part === last) {
       blocks.push(
         <div key={part.id} className="thinking-line">
@@ -170,11 +198,19 @@ export function ChatPanel({ opencodeAvailable, onAssistantDone }: Props): React.
   const [slashDismissed, setSlashDismissed] = useState(false)
   const [attachments, setAttachments] = useState<ChatAttachment[]>([])
   const [attachError, setAttachError] = useState<string | null>(null)
-  const [setup, setSetup] = useState<SetupStatus | null>(null)
   const listRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
   const onDoneRef = useRef(onAssistantDone)
   onDoneRef.current = onAssistantDone
+
+  // "Request changes" on a generated asset: pre-fill the composer so the user
+  // just describes what's wrong; the assistant regenerates (AGENTS.md tells it
+  // to reuse the same folder/name so the files are replaced).
+  const startAssetFeedback = (asset: AssetPreview): void => {
+    setInput(`Change the "${asset.label}" asset (${asset.path}): `)
+    textareaRef.current?.focus()
+  }
 
   const addFiles = async (files: FileList | null): Promise<void> => {
     if (!files || files.length === 0) return
@@ -224,21 +260,30 @@ export function ChatPanel({ opencodeAvailable, onAssistantDone }: Props): React.
         return next
       })
     })
-    // Screenshots taken during AI test runs flow into the conversation.
-    const offShot = window.api.onGameTestShot((dataUrl: string) => {
+    // Appends a part to the newest assistant message (screenshots and asset
+    // previews arrive from the main process while the assistant is working).
+    const appendToLatestAssistant = (part: AssistantPart): void => {
       setMessages((msgs) => {
         const next = [...msgs]
-        // Attach to the newest assistant message (the one doing the testing).
         for (let i = next.length - 1; i >= 0; i--) {
           if (next[i].role === 'assistant') {
             const msg = { ...next[i], parts: [...(next[i].parts ?? [])] }
-            msg.parts!.push({ id: `shot-${Date.now()}-${Math.random()}`, kind: 'image', text: '', dataUrl })
+            msg.parts!.push(part)
             next[i] = msg
             return next
           }
         }
-        return msgs
+        // No assistant message yet — show the part in a message of its own.
+        return [...next, { id: crypto.randomUUID(), role: 'assistant', content: '', parts: [part] }]
       })
+    }
+    // Screenshots taken during AI test runs flow into the conversation.
+    const offShot = window.api.onGameTestShot((dataUrl: string) => {
+      appendToLatestAssistant({ id: `shot-${Date.now()}-${Math.random()}`, kind: 'image', text: '', dataUrl })
+    })
+    // Generated 2D/3D asset previews — rendered with a feedback button.
+    const offAsset = window.api.onAssetPreview((preview: AssetPreview) => {
+      appendToLatestAssistant({ id: `asset-${Date.now()}-${Math.random()}`, kind: 'asset', text: '', asset: preview })
     })
     const offDone = window.api.onChatDone((payload) => {
       setStreaming(false)
@@ -258,6 +303,7 @@ export function ChatPanel({ opencodeAvailable, onAssistantDone }: Props): React.
     return () => {
       offPart()
       offShot()
+      offAsset()
       offDone()
     }
   }, [])
@@ -266,20 +312,6 @@ export function ChatPanel({ opencodeAvailable, onAssistantDone }: Props): React.
     const el = listRef.current
     if (el) el.scrollTop = el.scrollHeight
   }, [messages, streaming])
-
-  // Provider setup status: gates the chat until an API key is connected.
-  // Re-checked on window focus so running `opencode auth login` externally
-  // (or connecting elsewhere) clears the overlay without a restart.
-  useEffect(() => {
-    const check = (): void => {
-      void window.api.getSetupStatus().then((r) => {
-        if (r.ok) setSetup(r.data)
-      })
-    }
-    check()
-    window.addEventListener('focus', check)
-    return () => window.removeEventListener('focus', check)
-  }, [])
 
   const send = async (text?: string): Promise<void> => {
     const message = (text ?? input).trim()
@@ -311,14 +343,9 @@ export function ChatPanel({ opencodeAvailable, onAssistantDone }: Props): React.
     }
   }
 
-  const needsSetup = opencodeAvailable && setup !== null && !setup.configured
-
   return (
     <div className="chat-panel">
-      {needsSetup && setup && (
-        <SetupOverlay status={setup} onConfigured={(s) => setSetup(s)} />
-      )}
-      <div className={needsSetup ? 'chat-body dimmed' : 'chat-body'}>
+      <div className="chat-body">
       <div className="chat-messages" ref={listRef}>
         {messages.length === 0 && (
           <div className="chat-empty">
@@ -344,7 +371,14 @@ export function ChatPanel({ opencodeAvailable, onAssistantDone }: Props): React.
 
         {messages.map((m, i) => {
           if (m.role === 'assistant') {
-            return <AssistantMessage key={m.id} msg={m} isFirst={messages[i - 1]?.role !== 'assistant'} />
+            return (
+              <AssistantMessage
+                key={m.id}
+                msg={m}
+                isFirst={messages[i - 1]?.role !== 'assistant'}
+                onAssetFeedback={startAssetFeedback}
+              />
+            )
           }
           return (
             <div key={m.id} className={`msg ${m.role}`}>
@@ -417,6 +451,7 @@ export function ChatPanel({ opencodeAvailable, onAssistantDone }: Props): React.
             </div>
           )}
           <textarea
+            ref={textareaRef}
             className="chat-textarea"
             rows={3}
             placeholder="Build me a game where…  (/ for commands)"
