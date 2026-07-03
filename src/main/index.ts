@@ -38,6 +38,17 @@ function createWindow(): void {
     return { action: 'deny' }
   })
 
+  // Plain <a href> clicks (e.g. links in the chat's rendered markdown) don't
+  // go through the window-open handler — they navigate this window, which
+  // would replace the whole app UI. Block that and hand external URLs to the
+  // OS default browser instead. Same-URL navigations (dev-server reloads)
+  // stay allowed.
+  win.webContents.on('will-navigate', (event, url) => {
+    if (url === win.webContents.getURL()) return
+    event.preventDefault()
+    if (/^https?:/i.test(url)) shell.openExternal(url)
+  })
+
   if (!app.isPackaged) {
     win.webContents.on('console-message', (_event, _level, message) => {
       console.log('[renderer]', message)
