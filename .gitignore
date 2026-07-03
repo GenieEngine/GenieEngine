@@ -1,0 +1,8 @@
+node_modules/
+out/
+dist/
+vendor/
+native/layerhost/build/
+.claude/
+.DS_Store
+*.log

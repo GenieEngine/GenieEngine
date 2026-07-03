@@ -1,0 +1,66 @@
+import { contextBridge, ipcRenderer } from 'electron'
+import type { OpenGenieApi } from '../shared/types'
+
+function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
+  return ipcRenderer.invoke(channel, ...args) as Promise<T>
+}
+
+function subscribe(channel: string, cb: (...args: never[]) => void): () => void {
+  const listener = (_event: unknown, ...args: unknown[]): void => {
+    ;(cb as (...a: unknown[]) => void)(...args)
+  }
+  ipcRenderer.on(channel, listener)
+  return () => ipcRenderer.removeListener(channel, listener)
+}
+
+const api: OpenGenieApi = {
+  platform: process.platform,
+
+  getInitialState: () => invoke('app:getInitialState'),
+  chooseDirectory: () => invoke('dialog:chooseDirectory'),
+  createProject: (parentDir, name) => invoke('project:create', parentDir, name),
+  openProject: (path) => invoke('project:open', path),
+  openProjectDialog: () => invoke('project:openDialog'),
+  closeProject: () => invoke('project:close'),
+
+  playGame: () => invoke('game:play'),
+  stopGame: () => invoke('game:stop'),
+  locateGodot: () => invoke('game:locateGodot'),
+  setGameStageBounds: (rect) => ipcRenderer.send('game:stageBounds', rect),
+  sendGameInput: (event) => ipcRenderer.send('game:input', event),
+  onGameLog: (cb) => subscribe('game:log', cb),
+  onGameState: (cb) => subscribe('game:state', cb),
+  onGameCursor: (cb) => subscribe('game:cursor', cb),
+  onGameTestShot: (cb) => subscribe('game:test-shot', cb),
+
+  chatSend: (message, attachments) => invoke('chat:send', message, attachments),
+  chatCancel: () => invoke('chat:cancel'),
+  chatNewSession: () => invoke('chat:new'),
+  getSetupStatus: () => invoke('chat:setupStatus'),
+  saveSetup: (provider, model, apiKey) => invoke('chat:saveSetup', provider, model, apiKey),
+  onChatPart: (cb) => subscribe('chat:part', cb),
+  onChatDone: (cb) => subscribe('chat:done', cb),
+  onChatFilesChanged: (cb) => subscribe('chat:files-changed', cb),
+
+  exportGame: (name, platforms) => invoke('export:run', name, platforms),
+  cancelExport: () => invoke('export:cancel'),
+  revealExport: (path) => invoke('export:reveal', path),
+  onExportProgress: (cb) => subscribe('export:progress', cb),
+
+  listDir: (path) => invoke('files:list', path),
+  openInVSCode: (target) => invoke('files:openVSCode', target),
+  openInGodotEditor: () => invoke('files:openGodotEditor'),
+
+  gitStatus: () => invoke('git:status'),
+  gitInit: () => invoke('git:init'),
+  gitStage: (paths) => invoke('git:stage', paths),
+  gitUnstage: (paths) => invoke('git:unstage', paths),
+  gitDiscard: (change) => invoke('git:discard', change),
+  gitCommit: (message) => invoke('git:commit', message),
+  gitPush: () => invoke('git:push'),
+  gitPull: () => invoke('git:pull'),
+  gitAddRemote: (url) => invoke('git:addRemote', url),
+  gitLog: () => invoke('git:log')
+}
+
+contextBridge.exposeInMainWorld('api', api)

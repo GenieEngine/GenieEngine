@@ -1,0 +1,87 @@
+{
+  "name": "opengenie",
+  "productName": "OpenGenie",
+  "version": "0.1.0",
+  "description": "AI-powered game engine — build games by chatting with an AI, powered by Godot under the hood.",
+  "main": "out/main/index.js",
+  "author": "Jared Zhao",
+  "license": "MIT",
+  "scripts": {
+    "postinstall": "node scripts/fetch-vendor.mjs && node scripts/build-native.mjs",
+    "setup": "node scripts/fetch-vendor.mjs && node scripts/build-native.mjs",
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "start": "electron-vite preview",
+    "dist": "electron-vite build && electron-builder",
+    "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",
+    "typecheck:web": "tsc --noEmit -p tsconfig.web.json --composite false",
+    "typecheck": "npm run typecheck:node && npm run typecheck:web"
+  },
+  "dependencies": {
+    "dompurify": "^3.4.11",
+    "dugite": "^3.0.0",
+    "marked": "^18.0.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^33.3.0",
+    "electron-builder": "^25.1.8",
+    "electron-vite": "^3.1.0",
+    "node-gyp": "^11.5.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "typescript": "^5.7.2",
+    "vite": "^6.1.0"
+  },
+  "build": {
+    "appId": "ai.opengenie.desktop",
+    "productName": "OpenGenie",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "!src/**",
+      "!scripts/**",
+      "!vendor/**",
+      "!dist/**",
+      "!*.md",
+      "!tsconfig*.json",
+      "!electron.vite.config.ts",
+      "!CLAUDE.md",
+      "!native/**",
+      "native/layerhost/build/Release/*.node",
+      "resources/**"
+    ],
+    "asarUnpack": [
+      "node_modules/dugite/**",
+      "native/layerhost/build/Release/*.node",
+      "resources/**"
+    ],
+    "extraResources": [
+      {
+        "from": "vendor",
+        "to": "vendor"
+      }
+    ],
+    "mac": {
+      "identity": null,
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ]
+    }
+  }
+}
