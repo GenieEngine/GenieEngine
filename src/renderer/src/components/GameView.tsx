@@ -99,6 +99,7 @@ interface Props {
   onStop: () => void
   onLocateGodot: () => void
   onDismissError: () => void
+  advancedMode: boolean
 }
 
 const MAX_LOG_LINES = 500
@@ -119,7 +120,8 @@ export function GameView({
   onPlay,
   onStop,
   onLocateGodot,
-  onDismissError
+  onDismissError,
+  advancedMode
 }: Props): React.JSX.Element {
   const [logs, setLogs] = useState<string[]>([])
   const [testShot, setTestShot] = useState<string | null>(null)
@@ -169,6 +171,10 @@ export function GameView({
     if (!el) return
     const report = (): void => {
       const rect = el.getBoundingClientRect()
+      // Hidden behind another center tab (display:none → 0×0): reporting that
+      // would resize the running game's window to nothing. Skip; a real rect
+      // is re-reported the moment the tab becomes visible again.
+      if (rect.width < 2 || rect.height < 2) return
       const ratio = ASPECT_RATIOS[aspect]
       let width = rect.width
       let height = rect.height
@@ -288,26 +294,30 @@ export function GameView({
         {renderStage()}
       </div>
 
-      <div className="console-resize" onMouseDown={onConsoleDrag} title="Drag to resize console" />
-      <div className="game-console" style={{ height: consoleHeight }}>
-        <div className="console-header">
-          <span className="console-title">Output</span>
-          <button className="btn btn-sm btn-ghost" onClick={() => setLogs([])}>
-            Clear
-          </button>
-        </div>
-        <div className="console-body" ref={consoleRef}>
-          {logs.length === 0 ? (
-            <span className="console-line muted">Game console output will appear here.</span>
-          ) : (
-            logs.map((line, i) => (
-              <span key={i} className="console-line">
-                {line}
-              </span>
-            ))
-          )}
-        </div>
-      </div>
+      {advancedMode && (
+        <>
+          <div className="console-resize" onMouseDown={onConsoleDrag} title="Drag to resize console" />
+          <div className="game-console" style={{ height: consoleHeight }}>
+            <div className="console-header">
+              <span className="console-title">Output</span>
+              <button className="btn btn-sm btn-ghost" onClick={() => setLogs([])}>
+                Clear
+              </button>
+            </div>
+            <div className="console-body" ref={consoleRef}>
+              {logs.length === 0 ? (
+                <span className="console-line muted">Game console output will appear here.</span>
+              ) : (
+                logs.map((line, i) => (
+                  <span key={i} className="console-line">
+                    {line}
+                  </span>
+                ))
+              )}
+            </div>
+          </div>
+        </>
+      )}
     </section>
   )
 }

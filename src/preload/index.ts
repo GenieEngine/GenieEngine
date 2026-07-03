@@ -22,12 +22,14 @@ const api: OpenGenieApi = {
   openProject: (path) => invoke('project:open', path),
   openProjectDialog: () => invoke('project:openDialog'),
   closeProject: () => invoke('project:close'),
+  setAdvancedMode: (value) => invoke('app:setAdvancedMode', value),
 
   playGame: () => invoke('game:play'),
   stopGame: () => invoke('game:stop'),
   locateGodot: () => invoke('game:locateGodot'),
   setGameStageBounds: (rect) => ipcRenderer.send('game:stageBounds', rect),
   sendGameInput: (event) => ipcRenderer.send('game:input', event),
+  setGameLayerVisible: (visible) => ipcRenderer.send('game:layerVisible', visible),
   onGameLog: (cb) => subscribe('game:log', cb),
   onGameState: (cb) => subscribe('game:state', cb),
   onGameCursor: (cb) => subscribe('game:cursor', cb),
@@ -37,15 +39,19 @@ const api: OpenGenieApi = {
   chatCancel: () => invoke('chat:cancel'),
   chatNewSession: () => invoke('chat:new'),
   getSetupStatus: () => invoke('chat:setupStatus'),
-  saveSetup: (provider, model, apiKey) => invoke('chat:saveSetup', provider, model, apiKey),
+  saveSetup: (provider, model, apiKey, tencentSecretId, tencentSecretKey, openaiApiKey, openaiModel) =>
+    invoke('chat:saveSetup', provider, model, apiKey, tencentSecretId, tencentSecretKey, openaiApiKey, openaiModel),
   onChatPart: (cb) => subscribe('chat:part', cb),
   onChatDone: (cb) => subscribe('chat:done', cb),
+  onAssetPreview: (cb) => subscribe('chat:asset-preview', cb),
   onChatFilesChanged: (cb) => subscribe('chat:files-changed', cb),
 
   exportGame: (name, platforms) => invoke('export:run', name, platforms),
   cancelExport: () => invoke('export:cancel'),
   revealExport: (path) => invoke('export:reveal', path),
   onExportProgress: (cb) => subscribe('export:progress', cb),
+
+  scanEcs: () => invoke('ecs:scan'),
 
   listDir: (path) => invoke('files:list', path),
   openInVSCode: (target) => invoke('files:openVSCode', target),

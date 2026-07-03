@@ -15,6 +15,9 @@ import {
   stopGame,
   type TestInputAction
 } from './game'
+import { generateImageAsset, isGptImageConfigured } from './gptimage'
+import { generateAsset, isHy3dConfigured, type GenerateAssetRequest } from './hy3d'
+import type { AssetPreview } from '../../shared/types'
 
 /**
  * Local HTTP API that exposes the AI game-testing tools to the MCP bridge
@@ -37,8 +40,22 @@ function shotsDir(): string {
 interface ToolResult {
   ok: boolean
   text: string
-  /** Base64 PNG for screenshot results. */
+  /** Base64 image for screenshot / asset-preview results. */
   imageBase64?: string
+  /** MIME of imageBase64 (defaults to image/png in the bridge). */
+  imageMime?: string
+}
+
+/** Drop a generated-asset preview into the chat (ChatPanel renders it with a feedback button). */
+function pushAssetPreview(base64: string, mime: string, label: string, files: string[], kind: AssetPreview['kind']): void {
+  const preview: AssetPreview = {
+    dataUrl: `data:${mime};base64,${base64}`,
+    label,
+    // The asset's containing folder (first written file's directory).
+    path: files[0]?.split('/').slice(0, -1).join('/') ?? 'assets',
+    kind
+  }
+  sendToRenderer('chat:asset-preview', preview)
 }
 
 async function runTool(name: string, args: Record<string, unknown>): Promise<ToolResult> {
@@ -86,6 +103,56 @@ async function runTool(name: string, args: Record<string, unknown>): Promise<Too
         text: `status=${state.status} mode=${state.mode ?? 'none'}\n${logs.slice(-100).join('\n') || '(no output yet)'}`
       }
     }
+    case 'generate_3d_asset': {
+      const project = getCurrentProject()
+      if (!project) return { ok: false, text: 'No project is open in OpenGenie.' }
+      const result = await generateAsset(project.path, {
+        prompt: typeof args.prompt === 'string' ? args.prompt : undefined,
+        imagePath: typeof args.image_path === 'string' ? args.image_path : undefined,
+        folder: String(args.folder ?? ''),
+        name: String(args.name ?? ''),
+        faceCount: typeof args.face_count === 'number' ? args.face_count : undefined,
+        generateType: args.generate_type as GenerateAssetRequest['generateType'],
+        enablePBR: typeof args.enable_pbr === 'boolean' ? args.enable_pbr : undefined
+      })
+      // Written outside OpenCode's own file tracking — nudge the sidebar panels.
+      sendToRenderer('chat:files-changed')
+      // Show the turntable (or still) in the chat so the user can react to it.
+      const chatPreview = result.turntableBase64 ?? result.previewBase64
+      const chatMime = result.turntableBase64 ? result.turntableMime : result.previewMime
+      if (chatPreview && chatMime) {
+        pushAssetPreview(chatPreview, chatMime, String(args.name ?? 'asset'), result.files, '3d')
+      }
+      return {
+        ok: true,
+        text:
+          `3D asset generated. Files written:\n${result.files.map((f) => `- ${f}`).join('\n')}\n` +
+          'Godot auto-imports these under res:// — instance the model in a scene to use it. ' +
+          'The user sees this preview in the chat and may reply with feedback; if they do, regenerate with the same folder and name.',
+        imageBase64: result.previewBase64,
+        imageMime: result.previewMime
+      }
+    }
+    case 'generate_2d_asset': {
+      const project = getCurrentProject()
+      if (!project) return { ok: false, text: 'No project is open in OpenGenie.' }
+      const result = await generateImageAsset(project.path, {
+        prompt: String(args.prompt ?? ''),
+        folder: String(args.folder ?? ''),
+        name: String(args.name ?? '')
+      })
+      sendToRenderer('chat:files-changed')
+      pushAssetPreview(result.previewBase64, result.previewMime, String(args.name ?? 'asset'), result.files, '2d')
+      return {
+        ok: true,
+        text:
+          `2D asset generated (1024×1024 PNG, transparent background). Files written:\n${result.files.map((f) => `- ${f}`).join('\n')}\n` +
+          'Godot auto-imports it under res:// as a texture. ' +
+          'The user sees this preview in the chat and may reply with feedback; if they do, regenerate with the same folder and name.',
+        imageBase64: result.previewBase64,
+        imageMime: result.previewMime
+      }
+    }
     default:
       return { ok: false, text: `Unknown tool: ${name}` }
   }
@@ -113,6 +180,12 @@ export function startTestHarness(): void {
     }
     if (req.headers['x-opengenie-token'] !== token) {
       respond(403, { ok: false, text: 'invalid token' })
+      return
+    }
+    // Which optional tools are available — the MCP bridge checks this at
+    // startup so unconfigured tools are never offered to the model.
+    if (req.method === 'GET' && req.url === '/capabilities') {
+      respond(200, { hy3d: await isHy3dConfigured(), gptImage: await isGptImageConfigured() })
       return
     }
     if (req.method !== 'POST' || req.url !== '/tool') {

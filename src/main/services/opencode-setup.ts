@@ -3,6 +3,8 @@ import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { SetupStatus } from '../../shared/types'
+import { getGptImageModel, isGptImageConfigured, saveGptImageConfig } from './gptimage'
+import { isHy3dConfigured, saveHy3dCredentials } from './hy3d'
 import { shutdownChat } from './opencode'
 
 /**
@@ -59,10 +61,35 @@ export async function getSetupStatus(): Promise<SetupStatus> {
   const auth = await readJson(authPath())
   const configured = provider in auth || !!process.env[providerEnvVar(provider)]
 
-  return { configured, provider, model }
+  return {
+    configured,
+    provider,
+    model,
+    hy3dConfigured: await isHy3dConfigured(),
+    gptImageConfigured: await isGptImageConfigured(),
+    gptImageModel: await getGptImageModel()
+  }
 }
 
-export async function saveSetup(provider: string, model: string, apiKey: string): Promise<void> {
+export async function saveSetup(
+  provider: string,
+  model: string,
+  apiKey: string,
+  tencentSecretId = '',
+  tencentSecretKey = '',
+  openaiApiKey = '',
+  openaiModel = ''
+): Promise<void> {
+  // Optional asset-generation credentials: only touch a stored credential
+  // when the user typed something (blank = unchanged, so re-saving the model
+  // doesn't wipe an existing setup).
+  if (tencentSecretId.trim() || tencentSecretKey.trim()) {
+    await saveHy3dCredentials(tencentSecretId, tencentSecretKey)
+  }
+  // Unlike Tencent, the model may change on its own (it's always editable),
+  // so this always runs — saveGptImageConfig no-ops if there's neither a new
+  // key nor an existing one to attach the model to.
+  await saveGptImageConfig(openaiApiKey, openaiModel)
   const cleanProvider = provider.trim() || DEFAULT_PROVIDER
   const cleanModel = model.trim() || DEFAULT_MODEL
 

@@ -18,6 +18,8 @@ export interface InitialState {
   godotPath: string | null
   /** Resolved path of the OpenCode CLI, or null when it could not be found. */
   opencodePath: string | null
+  /** Whether the ECS viewer, files/git sidebars and console output are shown. */
+  advancedMode: boolean
 }
 
 export interface FileEntry {
@@ -77,6 +79,23 @@ export interface SetupStatus {
   configured: boolean
   provider: string
   model: string
+  /** True when Tencent HY 3D credentials are stored (enables 3D asset generation). */
+  hy3dConfigured: boolean
+  /** True when an OpenAI key is stored (enables 2D image asset generation). */
+  gptImageConfigured: boolean
+  /** The configured (or default) model used for 2D image generation. */
+  gptImageModel: string
+}
+
+/** A generated asset preview pushed into the chat so the user can react to it. */
+export interface AssetPreview {
+  /** data: URL of the preview image (PNG for 2D art, GIF turntable for 3D). */
+  dataUrl: string
+  /** Asset name the AI chose, e.g. "rocket". */
+  label: string
+  /** Project-relative folder the files were written to. */
+  path: string
+  kind: '2d' | '3d'
 }
 
 /** Live status of a tool invocation the AI is running. */
@@ -125,6 +144,26 @@ export type ExportProgress =
   | { phase: 'templates'; message: string; percent: number }
   | { phase: 'platform'; platform: ExportPlatform; status: 'exporting' | 'success' | 'error'; message?: string }
   | { phase: 'done'; message?: string }
+
+/**
+ * A code file with a parsed `#=== opengenie ===` header block (the format
+ * AGENTS.md mandates for every file the AI writes — see templates.ts).
+ * Backs the ECS viewer in the center pane.
+ */
+export interface EcsNode {
+  /** Project-relative path, e.g. "components/c_health.gd". */
+  path: string
+  /** File basename without extension — the node id edges refer to, e.g. "c_health". */
+  id: string
+  /** entity | component | system | autoload | ui | util | shader | other */
+  kind: string
+  name: string
+  summary: string
+  /** Component ids (c_*) this file composes (entities) or processes (systems). */
+  uses: string[]
+  /** Free-form header lines beyond the standard keys, shown verbatim in the detail card. */
+  extra: string[]
+}
 
 /** Modifier keys held during an input event. */
 export interface GameInputModifiers {
@@ -181,6 +220,8 @@ export interface OpenGenieApi {
   openProject(path: string): Promise<Result<ProjectInfo>>
   openProjectDialog(): Promise<Result<ProjectInfo | null>>
   closeProject(): Promise<Result<null>>
+  /** Persists whether advanced panels (ECS viewer, files, git, console) are shown. */
+  setAdvancedMode(value: boolean): Promise<Result<null>>
 
   // Game (Godot)
   playGame(): Promise<Result<null>>
@@ -190,6 +231,12 @@ export interface OpenGenieApi {
   setGameStageBounds(rect: StageRect): void
   /** Fire-and-forget: input captured over the embedded native game view. */
   sendGameInput(event: GameInputEvent): void
+  /**
+   * Fire-and-forget: hides/shows the embedded native game layer. The layer is
+   * composited by the OS above the web contents, so CSS cannot cover it —
+   * the renderer must hide it while another center tab is active.
+   */
+  setGameLayerVisible(visible: boolean): void
   onGameLog(cb: (line: string) => void): () => void
   onGameState(cb: (state: GameState) => void): () => void
   /** Godot CursorShape the game requested over its view (native mode). */
@@ -202,9 +249,20 @@ export interface OpenGenieApi {
   chatCancel(): Promise<Result<null>>
   chatNewSession(): Promise<Result<null>>
   getSetupStatus(): Promise<Result<SetupStatus>>
-  saveSetup(provider: string, model: string, apiKey: string): Promise<Result<SetupStatus>>
+  /** Optional credential fields left blank = leave that provider's setup unchanged. */
+  saveSetup(
+    provider: string,
+    model: string,
+    apiKey: string,
+    tencentSecretId?: string,
+    tencentSecretKey?: string,
+    openaiApiKey?: string,
+    openaiModel?: string
+  ): Promise<Result<SetupStatus>>
   onChatPart(cb: (part: ChatPartUpdate) => void): () => void
   onChatDone(cb: (payload: ChatDonePayload) => void): () => void
+  /** A generated 2D/3D asset preview to render in the chat (user can give feedback). */
+  onAssetPreview(cb: (preview: AssetPreview) => void): () => void
   /** Fired (debounced) when the AI edits project files during a response. */
   onChatFilesChanged(cb: () => void): () => void
 
@@ -213,6 +271,9 @@ export interface OpenGenieApi {
   cancelExport(): Promise<Result<null>>
   revealExport(path: string): Promise<Result<null>>
   onExportProgress(cb: (update: ExportProgress) => void): () => void
+
+  // ECS viewer
+  scanEcs(): Promise<Result<EcsNode[]>>
 
   // Files
   listDir(path: string): Promise<Result<FileEntry[]>>

@@ -1,10 +1,15 @@
 import { useState } from 'react'
 import type { ProjectInfo } from '../../../shared/types'
-import { FolderIcon, PlusIcon } from './Icons'
+import logo from '../assets/logo.png'
+import { AdvancedToggle } from './AdvancedToggle'
+import { FolderIcon, GearIcon, PlusIcon } from './Icons'
 
 interface Props {
   recents: ProjectInfo[]
   onProjectOpened: (project: ProjectInfo) => void
+  onOpenSettings: () => void
+  advancedMode: boolean
+  onToggleAdvancedMode: (value: boolean) => void
 }
 
 /**
@@ -12,7 +17,13 @@ interface Props {
  * existing Godot project. This is where the user picks where their game's
  * source code lives on disk.
  */
-export function Welcome({ recents, onProjectOpened }: Props): React.JSX.Element {
+export function Welcome({
+  recents,
+  onProjectOpened,
+  onOpenSettings,
+  advancedMode,
+  onToggleAdvancedMode
+}: Props): React.JSX.Element {
   const [creating, setCreating] = useState(false)
   const [name, setName] = useState('My First Game')
   const [parentDir, setParentDir] = useState('')
@@ -58,9 +69,21 @@ export function Welcome({ recents, onProjectOpened }: Props): React.JSX.Element 
   return (
     <div className="welcome">
       <div className="welcome-card">
-        <h1 className="logo">
-          <span className="brand-mark big">◆</span> OpenGenie
-        </h1>
+        <div className="welcome-head">
+          <h1 className="logo">
+            <img src={logo} alt="" className="brand-mark-img big" /> OpenGenie
+          </h1>
+          <div className="welcome-head-actions">
+            <AdvancedToggle value={advancedMode} onChange={onToggleAdvancedMode} />
+            <button
+              className="icon-btn"
+              title="AI settings (provider, model, 3D asset generation)"
+              onClick={onOpenSettings}
+            >
+              <GearIcon size={16} />
+            </button>
+          </div>
+        </div>
         <p className="tagline">The AI game engine. Describe your game — watch it come to life.</p>
 
         {!creating ? (

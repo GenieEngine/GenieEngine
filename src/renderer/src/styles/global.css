@@ -94,14 +94,25 @@ body.resizing-v {
   min-height: 0;
 }
 
+/* Wide invisible hit target (like VS Code's sash) so the resize cursor shows
+   without pixel-precise aim; only the slim centered strip lights up. */
 .divider {
-  width: 5px;
-  margin: 0 -2px;
+  width: 9px;
+  margin: 0 -4px;
   cursor: col-resize;
   z-index: 10;
   flex-shrink: 0;
+  position: relative;
 }
-.divider:hover {
+.divider::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 3px;
+}
+.divider:hover::after {
   background: var(--accent-soft);
 }
 
@@ -158,17 +169,22 @@ body.resizing-v {
 }
 
 .brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font-weight: 700;
   font-size: 13px;
   letter-spacing: 0.2px;
   white-space: nowrap;
 }
 
-.brand-mark {
-  color: var(--accent);
+.brand-mark-img {
+  height: 16px;
+  width: auto;
+  display: block;
 }
-.brand-mark.big {
-  font-size: 26px;
+.brand-mark-img.big {
+  height: 30px;
 }
 
 .titlebar-sep {
@@ -304,8 +320,108 @@ button:disabled {
   color: var(--text);
 }
 
+.toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.toggle-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+  user-select: none;
+}
+
+.toggle-switch {
+  position: relative;
+  width: 30px;
+  height: 17px;
+  flex-shrink: 0;
+  border-radius: 999px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-strong);
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+.toggle-switch:hover {
+  border-color: var(--text-faint);
+}
+.toggle-switch.on {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.toggle-switch-knob {
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: var(--text-dim);
+  transition: transform 0.12s ease, background 0.12s ease;
+}
+.toggle-switch.on .toggle-switch-knob {
+  transform: translateX(13px);
+  background: #fff;
+}
+
 .push-right {
   margin-left: auto;
+}
+
+/* CSS-only tooltip: the native `title` attribute silently never shows in
+   this app's frameless macOS window (titleBarStyle: hiddenInset appears to
+   suppress Chromium's native tooltip), so anything needing a hover
+   explanation renders a `.tooltip-bubble` shown via `.has-tooltip` instead. */
+.has-tooltip {
+  position: relative;
+}
+
+.tooltip-bubble {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 260px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.45;
+  cursor: default;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  z-index: 200;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.12s ease 0.35s, visibility 0s linear 0.47s;
+}
+
+.tooltip-bubble p {
+  margin: 0 0 8px;
+}
+
+.tooltip-bubble ul {
+  margin: 0 0 8px;
+  padding-left: 18px;
+}
+
+.tooltip-bubble li {
+  margin-bottom: 2px;
+}
+
+.tooltip-bubble p:last-child {
+  margin-bottom: 0;
+}
+
+.has-tooltip:hover .tooltip-bubble {
+  opacity: 1;
+  visibility: visible;
+  transition-delay: 0.35s, 0s;
 }
 
 .text-input,
@@ -367,7 +483,23 @@ button:disabled {
   padding: 40px 0;
 }
 
+.welcome-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.welcome-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
 .logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   font-size: 30px;
   font-weight: 800;
   letter-spacing: -0.5px;
@@ -475,6 +607,51 @@ button:disabled {
    Game view
    ========================================================================== */
 
+/* ==========================================================================
+   Center pane — tab bar switching between the game stage and the ECS viewer
+   ========================================================================== */
+
+.center-pane {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.center-tabs {
+  flex-shrink: 0;
+  display: flex;
+  gap: 2px;
+  padding: 6px 10px 0;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+
+.center-tab {
+  padding: 6px 16px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  border: 1px solid transparent;
+  border-bottom: none;
+  margin-bottom: -1px;
+}
+.center-tab:hover {
+  color: var(--text);
+}
+.center-tab.active {
+  color: var(--text);
+  background: var(--bg-panel);
+  border-color: var(--border);
+}
+
+.center-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
 .game-area {
   flex: 1;
   min-width: 0;
@@ -524,15 +701,20 @@ button:disabled {
 }
 
 .run-main {
-  border-top-right-radius: 0;
-  border-bottom-right-radius: 0;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
 }
 
 .run-caret {
-  border-top-left-radius: 0;
-  border-bottom-left-radius: 0;
-  border-left: 1px solid rgba(255, 255, 255, 0.14);
-  padding: 6px 7px;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  border-right: 1px solid rgba(255, 255, 255, 0.14);
+  padding: 6px 10px;
+  gap: 5px;
+}
+
+.run-caret-label {
+  white-space: nowrap;
 }
 
 .caret-down {
@@ -602,10 +784,11 @@ button:disabled {
 }
 
 /* ==========================================================================
-   Modals (export)
+   Modals (export, AI settings)
    ========================================================================== */
 
-.modal-backdrop {
+.modal-backdrop,
+.setup-overlay {
   position: fixed;
   inset: 0;
   z-index: 200;
@@ -615,6 +798,7 @@ button:disabled {
   padding: 24px;
   background: rgba(8, 8, 14, 0.6);
   backdrop-filter: blur(2px);
+  overflow-y: auto;
 }
 
 .modal-card {
@@ -861,16 +1045,24 @@ button:disabled {
   flex-shrink: 0;
 }
 
-/* Drag handle above the console, like the sidebar divider. */
+/* Drag handle above the console; same wide-hit-target treatment as .divider. */
 .console-resize {
-  height: 5px;
-  margin: -2px 0;
+  height: 9px;
+  margin: -4px 0;
   cursor: row-resize;
   z-index: 10;
   flex-shrink: 0;
   position: relative;
 }
-.console-resize:hover {
+.console-resize::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 3px;
+  height: 3px;
+}
+.console-resize:hover::after {
   background: var(--accent-soft);
 }
 
@@ -1024,36 +1216,11 @@ button:disabled {
   flex-direction: column;
 }
 
-.chat-panel {
-  position: relative; /* anchors the setup overlay */
-}
-
-/* The chat content itself; dimmed and inert behind the setup overlay. */
 .chat-body {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
-}
-.chat-body.dimmed {
-  filter: brightness(0.4) saturate(0.6);
-  pointer-events: none;
-  user-select: none;
-}
-
-/* ---- First-run provider setup overlay ------------------------------------ */
-
-.setup-overlay {
-  position: absolute;
-  inset: 0;
-  z-index: 20;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 18px;
-  background: rgba(10, 10, 16, 0.55);
-  backdrop-filter: blur(2px);
-  overflow-y: auto;
 }
 
 .setup-card {
@@ -1123,6 +1290,15 @@ button:disabled {
   margin-top: 2px;
   width: 100%;
   padding: 9px;
+}
+
+.setup-configured-btn {
+  width: 100%;
+  justify-content: flex-start;
+  padding: 7px 10px;
+  font-weight: 400;
+  font-size: 13px;
+  color: var(--text-dim);
 }
 
 .chat-messages {
@@ -1466,11 +1642,11 @@ button:disabled {
   }
 }
 
+/* No border/background of its own — the rounded inputbox below is the visual
+   boundary; a separator line here reads as clutter above the text field. */
 .chat-inputbar {
   flex-shrink: 0;
-  padding: 10px 12px;
-  border-top: 1px solid var(--border);
-  background: var(--bg-elevated);
+  padding: 4px 12px 10px;
   position: relative; /* anchors the slash-command popup */
 }
 
@@ -2018,4 +2194,398 @@ button:disabled {
   color: var(--accent);
   flex-shrink: 0;
   margin-right: 8px;
+}
+
+/* ==========================================================================
+   ECS viewer — entities / components / systems node network
+   ========================================================================== */
+
+:root {
+  --ecs-entity: #3ecf8e;
+  --ecs-component: #8f73ff;
+  --ecs-system: #f5a623;
+}
+
+.ecs-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-panel);
+}
+
+.ecs-graph {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  position: relative;
+  padding: 22px 26px;
+}
+
+.ecs-edges {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+}
+.ecs-edge {
+  stroke: var(--border-strong);
+  stroke-width: 1.5;
+  fill: none;
+  opacity: 0.9;
+  transition: opacity 0.12s ease, stroke 0.12s ease;
+}
+.ecs-edge.active {
+  stroke: var(--accent);
+  stroke-width: 2;
+  opacity: 1;
+}
+.ecs-edge.faded {
+  opacity: 0.15;
+}
+
+.ecs-columns {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 90px;
+  align-items: start;
+  min-width: 560px;
+}
+
+.ecs-col {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.ecs-col-header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-bottom: 2px;
+}
+
+.ecs-col-count {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0 7px;
+  font-size: 10.5px;
+  color: var(--text-faint);
+}
+
+.ecs-col-empty {
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+  padding: 12px;
+  font-size: 12px;
+  color: var(--text-faint);
+  text-align: center;
+}
+
+.ecs-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.ecs-dot.kind-entity { background: var(--ecs-entity); }
+.ecs-dot.kind-component { background: var(--ecs-component); }
+.ecs-dot.kind-system { background: var(--ecs-system); }
+.ecs-dot.kind-autoload, .ecs-dot.kind-ui, .ecs-dot.kind-util,
+.ecs-dot.kind-shader, .ecs-dot.kind-other { background: var(--text-faint); }
+
+/* Node cards sit above the SVG edge layer. */
+.ecs-node {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-left-width: 3px;
+  border-radius: var(--radius);
+  padding: 8px 11px;
+  cursor: pointer;
+  transition: opacity 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+}
+.ecs-node.kind-entity { border-left-color: var(--ecs-entity); }
+.ecs-node.kind-component { border-left-color: var(--ecs-component); }
+.ecs-node.kind-system { border-left-color: var(--ecs-system); }
+.ecs-node:hover { background: var(--bg-hover); }
+.ecs-node.dim { opacity: 0.28; }
+.ecs-node.focus { border-color: var(--accent); }
+.ecs-node.pinned { box-shadow: 0 0 0 1px var(--accent); }
+
+.ecs-node-name {
+  font-weight: 600;
+  font-size: 12.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ecs-node-file {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Non-ECS files (ui / util / autoload / shader / other) */
+.ecs-others {
+  position: relative;
+  z-index: 1;
+  margin-top: 28px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ecs-others-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.ecs-others-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ecs-other-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  padding: 4px 11px;
+  font-size: 12px;
+  color: var(--text);
+}
+.ecs-other-chip:hover { background: var(--bg-hover); }
+.ecs-other-chip.focus { border-color: var(--accent); }
+
+/* Detail card: the file's header comment, minus the delimiters. */
+.ecs-detail {
+  flex-shrink: 0;
+  min-height: 78px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-elevated);
+  padding: 11px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  justify-content: center;
+}
+
+.ecs-detail-head {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  min-width: 0;
+}
+
+.ecs-kind-badge {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  border-radius: 4px;
+  padding: 2px 7px;
+  flex-shrink: 0;
+}
+.ecs-kind-badge.kind-entity { color: var(--ecs-entity); background: var(--green-soft); }
+.ecs-kind-badge.kind-component { color: var(--ecs-component); background: var(--accent-soft); }
+.ecs-kind-badge.kind-system { color: var(--ecs-system); background: rgba(245, 166, 35, 0.14); }
+.ecs-kind-badge.kind-autoload, .ecs-kind-badge.kind-ui, .ecs-kind-badge.kind-util,
+.ecs-kind-badge.kind-shader, .ecs-kind-badge.kind-other {
+  color: var(--text-dim);
+  background: var(--bg-input);
+}
+
+.ecs-detail-name {
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.ecs-detail-path {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ecs-detail-summary {
+  font-size: 12.5px;
+  color: var(--text);
+}
+
+.ecs-detail-extra {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.ecs-detail-uses {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ecs-uses-label {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.ecs-use-chip {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ecs-component);
+  background: var(--accent-soft);
+  border-radius: 4px;
+  padding: 1px 7px;
+}
+
+.ecs-detail-hint {
+  font-size: 12px;
+}
+
+.ecs-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  text-align: center;
+  padding: 40px;
+}
+.ecs-empty h2 { font-size: 16px; }
+.ecs-empty p { max-width: 440px; line-height: 1.55; }
+.ecs-empty code {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  background: var(--bg-input);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+/* ==========================================================================
+   AI settings additions — reopenable panel + optional Tencent HY 3D section
+   ========================================================================== */
+
+.setup-card {
+  position: relative; /* anchors .setup-close */
+  max-height: calc(100vh - 140px);
+  overflow-y: auto;
+}
+
+.setup-close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+}
+
+.setup-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+
+.setup-section-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+/* ==========================================================================
+   Generated-asset previews in chat (2D sprites / 3D turntables) + feedback
+   ========================================================================== */
+
+.asset-card {
+  margin: 8px 0;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--bg-elevated);
+  max-width: 260px;
+}
+
+/* Checkerboard behind the image so transparent sprites read correctly. */
+.asset-card-img {
+  display: block;
+  width: 100%;
+  background:
+    conic-gradient(#1e1e2a 25%, #16161f 0 50%, #1e1e2a 0 75%, #16161f 0) 0 0 / 18px 18px;
+}
+
+.asset-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 9px;
+  border-top: 1px solid var(--border);
+  min-width: 0;
+}
+
+.asset-kind-badge {
+  flex-shrink: 0;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+.asset-kind-badge.kind-2d {
+  color: var(--blue);
+  background: rgba(79, 156, 255, 0.14);
+}
+.asset-kind-badge.kind-3d {
+  color: var(--ecs-component);
+  background: var(--accent-soft);
+}
+
+.asset-card-name {
+  font-weight: 600;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.asset-card-path {
+  flex: 1;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.asset-feedback-btn {
+  flex-shrink: 0;
 }

@@ -1,8 +1,9 @@
 import { dialog, ipcMain } from 'electron'
 import type { ChatAttachment, GameInputEvent, GitChange, InitialState, ProjectInfo, Result, StageRect } from '../shared/types'
 import { normalizeGodotPath, resolveGodot, resolveOpencode } from './services/binaries'
+import { scanEcs } from './services/ecs'
 import * as files from './services/files'
-import { handleGameInput, openGodotEditor, playGame, setStageRect, stopGame } from './services/game'
+import { handleGameInput, openGodotEditor, playGame, setGameLayerVisible, setStageRect, stopGame } from './services/game'
 import * as git from './services/git'
 import { cancelChat, newChatSession, sendChatMessage, shutdownChat } from './services/opencode'
 import { getSetupStatus, saveSetup } from './services/opencode-setup'
@@ -11,9 +12,11 @@ import type { ExportPlatform } from '../shared/types'
 import { createProject, openProject, projectInfoFor } from './services/projects'
 import {
   addRecentProject,
+  getAdvancedMode,
   getCurrentProject,
   getRecentProjectPaths,
   requireProject,
+  setAdvancedMode,
   setCurrentProject,
   setGodotPath
 } from './state'
@@ -49,9 +52,12 @@ export function registerIpcHandlers(): void {
       project: getCurrentProject(),
       recentProjects: recents,
       godotPath: await resolveGodot(),
-      opencodePath: await resolveOpencode()
+      opencodePath: await resolveOpencode(),
+      advancedMode: getAdvancedMode()
     }
   })
+
+  handle('app:setAdvancedMode', (value: boolean) => setAdvancedMode(Boolean(value)))
 
   handle('dialog:chooseDirectory', async (): Promise<string | null> => {
     const result = await dialog.showOpenDialog({
@@ -92,6 +98,7 @@ export function registerIpcHandlers(): void {
   // High-frequency fire-and-forget channels — plain listeners, no Result envelope.
   ipcMain.on('game:stageBounds', (_event, rect: StageRect) => setStageRect(rect))
   ipcMain.on('game:input', (_event, input: GameInputEvent) => handleGameInput(input))
+  ipcMain.on('game:layerVisible', (_event, visible: boolean) => setGameLayerVisible(Boolean(visible)))
   handle('game:locateGodot', async (): Promise<string | null> => {
     const result = await dialog.showOpenDialog({
       title: 'Locate the Godot application or binary',
@@ -113,10 +120,21 @@ export function registerIpcHandlers(): void {
   handle('chat:cancel', () => cancelChat())
   handle('chat:new', () => newChatSession())
   handle('chat:setupStatus', () => getSetupStatus())
-  handle('chat:saveSetup', async (provider: string, model: string, apiKey: string) => {
-    await saveSetup(provider, model, apiKey)
-    return getSetupStatus()
-  })
+  handle(
+    'chat:saveSetup',
+    async (
+      provider: string,
+      model: string,
+      apiKey: string,
+      tencentSecretId?: string,
+      tencentSecretKey?: string,
+      openaiApiKey?: string,
+      openaiModel?: string
+    ) => {
+      await saveSetup(provider, model, apiKey, tencentSecretId, tencentSecretKey, openaiApiKey, openaiModel)
+      return getSetupStatus()
+    }
+  )
 
   // ---- Export ----------------------------------------------------------------
   handle('export:run', (name: string, platforms: ExportPlatform[]) =>
@@ -124,6 +142,9 @@ export function registerIpcHandlers(): void {
   )
   handle('export:cancel', () => cancelExport())
   handle('export:reveal', (path: string) => revealExport(path))
+
+  // ---- ECS viewer -------------------------------------------------------------
+  handle('ecs:scan', () => scanEcs(requireProject().path))
 
   // ---- Files -----------------------------------------------------------------
   handle('files:list', (dir: string) => files.listDir(dir))

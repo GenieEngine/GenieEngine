@@ -106,8 +106,9 @@ function templatesDir(): string {
  * in scripts/fetch-vendor.mjs (which can't be imported here — it's a
  * postinstall script with top-level side effects). ditto was previously used
  * unconditionally, which broke exports on Windows/Linux.
+ * Also used by hy3d.ts for generated-asset archives.
  */
-async function extractZip(archive: string, dest: string): Promise<void> {
+export async function extractZip(archive: string, dest: string): Promise<void> {
   switch (process.platform) {
     case 'darwin':
       // ditto preserves symlinks and permissions (needed for .app templates).

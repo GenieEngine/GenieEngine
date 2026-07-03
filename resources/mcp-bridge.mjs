@@ -10,6 +10,7 @@
  * Zero dependencies; speaks newline-delimited JSON-RPC 2.0 on stdio.
  */
 import { readFileSync } from 'node:fs'
+import { request as httpRequest } from 'node:http'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { createInterface } from 'node:readline'
@@ -25,22 +26,69 @@ function userDataDir() {
   }
 }
 
-async function callHarness(name, args) {
-  let harness
+function readHarness() {
   try {
-    harness = JSON.parse(readFileSync(join(userDataDir(), 'harness.json'), 'utf8'))
+    return JSON.parse(readFileSync(join(userDataDir(), 'harness.json'), 'utf8'))
   } catch {
+    return null
+  }
+}
+
+/**
+ * node:http with timeout 0 — NOT fetch: undici aborts responses that take
+ * more than 5 minutes to start, and 3D asset generation legitimately takes
+ * longer than that.
+ */
+function harnessRequest(harness, method, path, body) {
+  return new Promise((resolve, reject) => {
+    const req = httpRequest(
+      {
+        host: '127.0.0.1',
+        port: harness.port,
+        method,
+        path,
+        headers: { 'content-type': 'application/json', 'x-opengenie-token': harness.token },
+        timeout: 0
+      },
+      (res) => {
+        let data = ''
+        res.setEncoding('utf8')
+        res.on('data', (chunk) => (data += chunk))
+        res.on('end', () => {
+          try {
+            resolve(JSON.parse(data))
+          } catch {
+            reject(new Error(`invalid harness response (HTTP ${res.statusCode})`))
+          }
+        })
+        res.on('error', reject)
+      }
+    )
+    req.on('error', reject)
+    req.end(body ?? '')
+  })
+}
+
+async function callHarness(name, args) {
+  const harness = readHarness()
+  if (!harness) {
     return { ok: false, text: 'OpenGenie does not appear to be running (harness.json not found). These tools only work while the OpenGenie app is open.' }
   }
   try {
-    const res = await fetch(`http://127.0.0.1:${harness.port}/tool`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-opengenie-token': harness.token },
-      body: JSON.stringify({ name, arguments: args })
-    })
-    return await res.json()
+    return await harnessRequest(harness, 'POST', '/tool', JSON.stringify({ name, arguments: args }))
   } catch (err) {
     return { ok: false, text: `Failed to reach OpenGenie: ${err.message}` }
+  }
+}
+
+/** Optional-tool availability, checked once per bridge lifetime (per chat server). */
+async function harnessCapabilities() {
+  const harness = readHarness()
+  if (!harness) return {}
+  try {
+    return await harnessRequest(harness, 'GET', '/capabilities')
+  } catch {
+    return {}
   }
 }
 
@@ -111,6 +159,57 @@ const TOOLS = [
   }
 ]
 
+/**
+ * Offered only when the user has configured an OpenAI API key in OpenGenie's
+ * settings panel (checked via /capabilities at list time).
+ */
+const GPT_IMAGE_TOOL = {
+  name: 'generate_2d_asset',
+  description:
+    'Generate a 2D image asset (sprite, icon, texture, UI art) with OpenAI image generation and save it into the project\'s assets/ folder. ' +
+    'Fixed output: one 1024×1024 PNG with a TRANSPARENT background at medium quality — ideal for sprites and icons. ' +
+    'Takes ~10-60 seconds; returns the written file path plus the image itself so you can check it. ' +
+    'Describe ONE subject per call (subject, colors/materials, art style, camera angle e.g. "top-down" or "side view for a platformer"). ' +
+    'Organize assets to mirror the ECS layout: folder "entities/e_player" for that entity\'s art, "ui" for HUD art, "shared" for reusable pieces. ' +
+    'If the user gives feedback on the preview, regenerate with the SAME folder and name so the files are replaced.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      prompt: { type: 'string', description: 'Text description of the image (one subject, style, colors, view angle).' },
+      folder: { type: 'string', description: 'Destination under assets/, mirroring the ECS structure — e.g. "entities/e_player", "ui", "shared".' },
+      name: { type: 'string', description: 'Asset name (lowercase slug), e.g. "coin-icon".' }
+    },
+    required: ['prompt', 'folder', 'name']
+  }
+}
+
+/**
+ * Offered only when the user has configured Tencent HY 3D credentials in
+ * OpenGenie's setup panel (checked via /capabilities at list time).
+ */
+const HY3D_TOOL = {
+  name: 'generate_3d_asset',
+  description:
+    'Generate a 3D model with Tencent HY 3D and save it into the project\'s assets/ folder. ' +
+    'Takes 1-5 minutes — the call blocks until the model is ready and returns the written file paths plus a preview image. ' +
+    'Describe ONE object per call (simple prompt: subject, shape, colors/materials, style). ' +
+    'Organize assets to mirror the ECS layout: folder "entities/e_player" for that entity\'s model, "ui" for HUD art, "shared" for reusable pieces. ' +
+    'Keep face_count modest for game use (default 60000; use generate_type "LowPoly" for stylized low-poly).',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      prompt: { type: 'string', description: 'Text description of the 3D object (max 1024 chars). Required unless image_path is given.' },
+      image_path: { type: 'string', description: 'Project-relative path to a reference image (jpg/png/webp, single object on a plain background). Cannot be combined with prompt except in Sketch mode.' },
+      folder: { type: 'string', description: 'Destination under assets/, mirroring the ECS structure — e.g. "entities/e_player", "ui", "shared".' },
+      name: { type: 'string', description: 'Asset name (lowercase slug), e.g. "spaceship".' },
+      face_count: { type: 'number', description: 'Polygon budget, 3000-1500000 (default 60000).' },
+      generate_type: { type: 'string', enum: ['Normal', 'LowPoly', 'Geometry', 'Sketch'], description: 'Normal = textured model (default) · LowPoly = stylized reduced-poly · Geometry = untextured white model · Sketch = from a line drawing.' },
+      enable_pbr: { type: 'boolean', description: 'Generate PBR materials (default true; ignored for Geometry).' }
+    },
+    required: ['folder', 'name']
+  }
+}
+
 function send(message) {
   process.stdout.write(JSON.stringify(message) + '\n')
 }
@@ -128,12 +227,16 @@ async function handle(request) {
       }
     })
   } else if (method === 'tools/list') {
-    send({ jsonrpc: '2.0', id, result: { tools: TOOLS } })
+    const caps = await harnessCapabilities()
+    const tools = [...TOOLS]
+    if (caps.hy3d) tools.push(HY3D_TOOL)
+    if (caps.gptImage) tools.push(GPT_IMAGE_TOOL)
+    send({ jsonrpc: '2.0', id, result: { tools } })
   } else if (method === 'tools/call') {
     const result = await callHarness(params.name, params.arguments ?? {})
     const content = []
     if (result.imageBase64) {
-      content.push({ type: 'image', data: result.imageBase64, mimeType: 'image/png' })
+      content.push({ type: 'image', data: result.imageBase64, mimeType: result.imageMime ?? 'image/png' })
     }
     content.push({ type: 'text', text: result.text ?? (result.ok ? 'ok' : 'failed') })
     send({ jsonrpc: '2.0', id, result: { content, isError: !result.ok } })
