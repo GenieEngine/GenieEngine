@@ -52,6 +52,7 @@
       "!electron.vite.config.ts",
       "!CLAUDE.md",
       "!native/**",
+      "out/**",
       "native/layerhost/build/Release/*.node",
       "resources/**"
     ],
