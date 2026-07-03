@@ -4,9 +4,23 @@
  * and the AI assistant has a valid starting point to build on.
  */
 
-/** Godot config strings cannot contain double quotes; keep names safe. */
+/**
+ * Project names are interpolated into Godot config strings, GDScript string
+ * literals and Markdown. In those contexts `"` delimits the string, `\` is
+ * an escape character, and a raw newline breaks out of the value entirely —
+ * e.g. a name containing "\n[autoload]\n…" would inject a config section
+ * into project.godot that executes arbitrary GDScript when the project runs.
+ * Names are display-only, so strip the dangerous characters rather than
+ * trying to escape them per-context.
+ */
 function sanitize(name: string): string {
-  return name.replace(/"/g, "'")
+  return (
+    name
+      .replace(/[\\\u0000-\u001f\u007f]/g, ' ')
+      .replace(/"/g, "'")
+      .replace(/\s+/g, ' ')
+      .trim() || 'Untitled Game'
+  )
 }
 
 export function projectGodot(name: string): string {

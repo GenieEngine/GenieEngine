@@ -285,8 +285,13 @@ async function playNativeEmbedded(godot: string, projectPath: string, visible: b
   pipeLines(proc.stdout)
   pipeLines(proc.stderr)
   proc.once('exit', (code, signal) => {
-    nativeProcess = null
     emitLog(`[opengenie] game exited (${signal ?? `code ${code ?? 0}`})`)
+    // Only tear down if this process is still the active run. After a Stop,
+    // the old process exits up to 1.5s later (grace period before kill); by
+    // then a new run may own nativeProcess/embedSession, and tearing down
+    // here would kill that new run.
+    if (nativeProcess !== proc) return
+    nativeProcess = null
     stopGame()
   })
 }
