@@ -38,6 +38,9 @@ const api: OpenGenieApi = {
   chatSend: (message, attachments) => invoke('chat:send', message, attachments),
   chatCancel: () => invoke('chat:cancel'),
   chatNewSession: () => invoke('chat:new'),
+  chatLoadState: (projectPath) => invoke('chat:loadState', projectPath),
+  chatSaveHistory: (projectPath, messages) => invoke('chat:saveHistory', projectPath, messages),
+  chatAppendInput: (projectPath, entry) => invoke('chat:appendInput', projectPath, entry),
   getSetupStatus: () => invoke('chat:setupStatus'),
   saveSetup: (provider, model, apiKey, tencentSecretId, tencentSecretKey, openaiApiKey, openaiModel) =>
     invoke('chat:saveSetup', provider, model, apiKey, tencentSecretId, tencentSecretKey, openaiApiKey, openaiModel),

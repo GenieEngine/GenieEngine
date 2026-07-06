@@ -2,8 +2,11 @@
 /**
  * MCP (Model Context Protocol) stdio server that exposes OpenGenie's game
  * testing tools to OpenCode. It is a thin bridge: every tool call is
- * forwarded over HTTP to the running OpenGenie app, discovered via
- * harness.json in OpenGenie's userData directory (written on app launch).
+ * forwarded over HTTP to the running OpenGenie app. The app is discovered
+ * via OPENGENIE_HARNESS_PORT/TOKEN env vars (set by the app on the OpenCode
+ * server it spawns, inherited by this process — always the right instance),
+ * falling back to harness.json in OpenGenie's userData directory for
+ * OpenCode sessions that weren't launched by the app.
  *
  * Spawned by OpenCode (registered in the global opencode config by the app)
  * with Electron's binary in Node mode — no separate Node install needed.
@@ -27,6 +30,12 @@ function userDataDir() {
 }
 
 function readHarness() {
+  // Env vars come from the OpenGenie instance that spawned this OpenCode
+  // server, so they can't point at the wrong instance and don't suffer the
+  // shared-file races harness.json has when several instances run at once
+  // (e.g. dev + packaged: one quitting used to delete the other's file).
+  const { OPENGENIE_HARNESS_PORT: envPort, OPENGENIE_HARNESS_TOKEN: envToken } = process.env
+  if (envPort && envToken) return { port: Number(envPort), token: envToken }
   try {
     return JSON.parse(readFileSync(join(userDataDir(), 'harness.json'), 'utf8'))
   } catch {

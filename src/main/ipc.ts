@@ -5,7 +5,8 @@ import { scanEcs } from './services/ecs'
 import * as files from './services/files'
 import { handleGameInput, openGodotEditor, playGame, setGameLayerVisible, setStageRect, stopGame } from './services/game'
 import * as git from './services/git'
-import { cancelChat, newChatSession, sendChatMessage, shutdownChat } from './services/opencode'
+import { appendInputHistory, clearChatHistory, loadChatState, saveChatHistory } from './services/chat-history'
+import { cancelChat, getSessionID, newChatSession, resumeSession, sendChatMessage, shutdownChat } from './services/opencode'
 import { getSetupStatus, saveSetup } from './services/opencode-setup'
 import { cancelExport, revealExport, runExport } from './services/export'
 import type { ExportPlatform } from '../shared/types'
@@ -118,7 +119,30 @@ export function registerIpcHandlers(): void {
     sendChatMessage(message, requireProject().path, attachments ?? [])
   )
   handle('chat:cancel', () => cancelChat())
-  handle('chat:new', () => newChatSession())
+  // /clear: fresh conversation and the saved transcript is forgotten (the
+  // ↑/↓ input history intentionally survives — see chat-history.ts).
+  handle('chat:new', async () => {
+    newChatSession()
+    await clearChatHistory(requireProject().path)
+  })
+  // Chat persistence takes explicit project paths (not requireProject): a
+  // debounced save can still fire from the previous project's ChatPanel just
+  // after the current project changed, and must land in its own folder.
+  handle('chat:loadState', async (projectPath: string) => {
+    const state = await loadChatState(projectPath)
+    // Continue the saved conversation only when this is (still) the active
+    // project — the AI then keeps its context, not just the visible log.
+    if (getCurrentProject()?.path === projectPath) resumeSession(state.sessionID)
+    return { messages: state.messages, inputHistory: state.inputHistory }
+  })
+  handle('chat:saveHistory', (projectPath: string, messages: unknown[]) =>
+    saveChatHistory(
+      projectPath,
+      messages,
+      getCurrentProject()?.path === projectPath ? getSessionID() : null
+    )
+  )
+  handle('chat:appendInput', (projectPath: string, entry: string) => appendInputHistory(projectPath, entry))
   handle('chat:setupStatus', () => getSetupStatus())
   handle(
     'chat:saveSetup',

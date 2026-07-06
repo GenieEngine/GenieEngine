@@ -107,6 +107,9 @@ opengenie_test_agent.gd
 
 # OpenGenie export output
 exports/
+
+# OpenGenie local chat history (personal, never shared)
+.opengenie/
 `
 }
 
