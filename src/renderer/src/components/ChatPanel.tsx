@@ -1,7 +1,13 @@
 import DOMPurify from 'dompurify'
 import { marked } from 'marked'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { AssetPreview, ChatAttachment, ChatPartUpdate, ChatToolStatus } from '../../../shared/types'
+import type {
+  AssetPreview,
+  ChatAttachment,
+  ChatPartUpdate,
+  ChatQuestionRequest,
+  ChatToolStatus
+} from '../../../shared/types'
 import { FileIcon, PlusIcon, SearchIcon, SendIcon, SparkIcon, StopIcon, TerminalIcon, XIcon } from './Icons'
 
 marked.setOptions({ gfm: true, breaks: true })
@@ -231,6 +237,118 @@ function AssistantMessage({
   )
 }
 
+/**
+ * The assistant's "question" tool blocks its whole turn until it hears back,
+ * so this card is the only way to unblock it: options render as buttons, a
+ * lone single-choice question answers on click, anything else (multi-select,
+ * several questions, free-text) collects choices behind one Answer button,
+ * and dismissing tells the assistant to carry on without an answer.
+ */
+function QuestionCard({
+  request,
+  onAnswer,
+  onDismiss
+}: {
+  request: ChatQuestionRequest
+  onAnswer: (answers: string[][]) => void
+  onDismiss: () => void
+}): React.JSX.Element {
+  const [selected, setSelected] = useState<string[][]>(() => request.questions.map(() => []))
+  const [customs, setCustoms] = useState<string[]>(() => request.questions.map(() => ''))
+  const [customOpen, setCustomOpen] = useState<boolean[]>(() => request.questions.map(() => false))
+
+  const instant = request.questions.length === 1 && !request.questions[0].multiple
+  const answerFor = (i: number): string[] =>
+    customOpen[i] && customs[i].trim() ? [customs[i].trim()] : selected[i]
+  const complete = request.questions.every((_, i) => answerFor(i).length > 0)
+  const submitAll = (): void => onAnswer(request.questions.map((_, i) => answerFor(i)))
+
+  const choose = (qi: number, label: string): void => {
+    if (instant && !customOpen[qi]) {
+      onAnswer([[label]])
+      return
+    }
+    setCustomOpen((open) => open.map((o, i) => (i === qi ? false : o)))
+    setSelected((sel) =>
+      sel.map((choices, i) => {
+        if (i !== qi) return choices
+        if (request.questions[qi].multiple) {
+          return choices.includes(label) ? choices.filter((c) => c !== label) : [...choices, label]
+        }
+        return [label]
+      })
+    )
+  }
+
+  return (
+    <div className="question-card">
+      <div className="question-card-head">
+        <SparkIcon size={11} />
+        <span>The assistant needs your input</span>
+        <button
+          className="question-dismiss"
+          title="Dismiss — the assistant continues without an answer"
+          onClick={onDismiss}
+        >
+          <XIcon size={9} />
+        </button>
+      </div>
+      {request.questions.map((q, qi) => (
+        <div key={qi} className="question-block">
+          <div className="question-text">
+            {q.header && <span className="question-header-chip">{q.header}</span>}
+            {q.question}
+          </div>
+          <div className="question-options">
+            {q.options.map((opt) => (
+              <button
+                key={opt.label}
+                className={
+                  selected[qi].includes(opt.label) && !customOpen[qi]
+                    ? 'question-option selected'
+                    : 'question-option'
+                }
+                onClick={() => choose(qi, opt.label)}
+              >
+                <span className="question-option-label">{opt.label}</span>
+                {opt.description && <span className="question-option-desc">{opt.description}</span>}
+              </button>
+            ))}
+            {q.custom && (
+              <button
+                className={customOpen[qi] ? 'question-option selected' : 'question-option'}
+                onClick={() => setCustomOpen((open) => open.map((o, i) => (i === qi ? !o : o)))}
+              >
+                <span className="question-option-label">Other…</span>
+              </button>
+            )}
+          </div>
+          {q.custom && customOpen[qi] && (
+            <input
+              className="question-custom-input"
+              autoFocus
+              placeholder="Type your answer and press Enter…"
+              value={customs[qi]}
+              onChange={(e) => setCustoms((c) => c.map((v, i) => (i === qi ? e.target.value : v)))}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && complete) {
+                  e.preventDefault()
+                  submitAll()
+                }
+              }}
+            />
+          )}
+        </div>
+      ))}
+      {(!instant || customOpen[0]) && (
+        <button className="btn btn-sm btn-primary question-submit" disabled={!complete} onClick={submitAll}>
+          Answer
+        </button>
+      )}
+    </div>
+  )
+}
+
 export function ChatPanel({ projectPath, opencodeAvailable, onAssistantDone }: Props): React.JSX.Element {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [input, setInput] = useState('')
@@ -243,6 +361,8 @@ export function ChatPanel({ projectPath, opencodeAvailable, onAssistantDone }: P
   // so a depth counter decides when the drag has truly left the panel.
   const [dragActive, setDragActive] = useState(false)
   const dragDepth = useRef(0)
+  // A question the assistant is blocked on (null = none pending).
+  const [question, setQuestion] = useState<ChatQuestionRequest | null>(null)
   // ↑/↓ recall of previously sent messages: historyPos is the entry being
   // browsed (null = not browsing), draftRef holds whatever was typed before
   // browsing started so ↓ past the newest entry brings it back.
@@ -272,6 +392,7 @@ export function ChatPanel({ projectPath, opencodeAvailable, onAssistantDone }: P
           setMessages(restored)
         }
         setInputHistory(result.data.inputHistory)
+        setQuestion(result.data.pendingQuestion ?? null)
       }
       setCanSave(true)
     })
@@ -393,8 +514,14 @@ export function ChatPanel({ projectPath, opencodeAvailable, onAssistantDone }: P
     const offAsset = window.api.onAssetPreview((preview: AssetPreview) => {
       appendToLatestAssistant({ id: `asset-${Date.now()}-${Math.random()}`, kind: 'asset', text: '', asset: preview })
     })
+    const offQuestion = window.api.onChatQuestion(setQuestion)
+    const offQuestionDone = window.api.onChatQuestionDone((id: string) => {
+      setQuestion((q) => (q?.id === id ? null : q))
+    })
     const offDone = window.api.onChatDone((payload) => {
       setStreaming(false)
+      // However the turn ended, no question can still be waiting on it.
+      setQuestion(null)
       setMessages((msgs) => {
         const finalized = msgs.map((m) => (m.streaming ? { ...m, streaming: false } : m))
         if (payload.cancelled) {
@@ -415,6 +542,8 @@ export function ChatPanel({ projectPath, opencodeAvailable, onAssistantDone }: P
       offPart()
       offShot()
       offAsset()
+      offQuestion()
+      offQuestionDone()
       offDone()
     }
   }, [])
@@ -422,7 +551,17 @@ export function ChatPanel({ projectPath, opencodeAvailable, onAssistantDone }: P
   useEffect(() => {
     const el = listRef.current
     if (el) el.scrollTop = el.scrollHeight
-  }, [messages, streaming])
+  }, [messages, streaming, question])
+
+  const answerQuestion = (req: ChatQuestionRequest, answers: string[][]): void => {
+    setQuestion(null)
+    void window.api.chatAnswerQuestion(req.id, answers)
+  }
+
+  const dismissQuestion = (req: ChatQuestionRequest): void => {
+    setQuestion(null)
+    void window.api.chatRejectQuestion(req.id)
+  }
 
   const send = async (text?: string): Promise<void> => {
     const message = (text ?? input).trim()
@@ -462,6 +601,7 @@ export function ChatPanel({ projectPath, opencodeAvailable, onAssistantDone }: P
       await window.api.chatNewSession()
       setMessages([])
       setStreaming(false)
+      setQuestion(null)
       setHistoryPos(null)
       draftRef.current = ''
     }
@@ -561,7 +701,16 @@ export function ChatPanel({ projectPath, opencodeAvailable, onAssistantDone }: P
           )
         })}
 
-        {streaming && !messages.some((m) => m.role === 'assistant' && m.streaming) && (
+        {question && (
+          <QuestionCard
+            key={question.id}
+            request={question}
+            onAnswer={(answers) => answerQuestion(question, answers)}
+            onDismiss={() => dismissQuestion(question)}
+          />
+        )}
+
+        {streaming && !question && !messages.some((m) => m.role === 'assistant' && m.streaming) && (
           <div className="msg assistant">
             <span className="typing-dots">
               <span />

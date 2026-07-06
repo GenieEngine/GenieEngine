@@ -82,6 +82,36 @@ export interface SavedChatState {
   messages: unknown[]
   /** Everything the user ever sent, oldest first — for ↑/↓ recall. */
   inputHistory: string[]
+  /** A question the assistant is still waiting on (survives window reloads). */
+  pendingQuestion: ChatQuestionRequest | null
+}
+
+/** One choice offered by the assistant's interactive "question" tool. */
+export interface ChatQuestionOption {
+  label: string
+  description: string
+}
+
+/** One question from the assistant's "question" tool (mirrors OpenCode's schema). */
+export interface ChatQuestion {
+  question: string
+  /** Short chip/tag label, e.g. "Art style". */
+  header: string
+  options: ChatQuestionOption[]
+  /** Allow selecting several options. */
+  multiple?: boolean
+  /** Allow a free-text answer. */
+  custom?: boolean
+}
+
+/**
+ * A pending "question" tool request. The turn blocks until every question is
+ * answered (chatAnswerQuestion) or the request is dismissed
+ * (chatRejectQuestion) — ignoring it would leave the tool spinning forever.
+ */
+export interface ChatQuestionRequest {
+  id: string
+  questions: ChatQuestion[]
 }
 
 /** State of the AI provider setup (API key / provider / model). */
@@ -266,6 +296,10 @@ export interface OpenGenieApi {
   chatSaveHistory(projectPath: string, messages: unknown[]): Promise<Result<null>>
   /** Record a sent message for ↑/↓ recall (kept even across /clear). */
   chatAppendInput(projectPath: string, entry: string): Promise<Result<null>>
+  /** Answer a pending question — one array of selected labels per question, in order. */
+  chatAnswerQuestion(requestID: string, answers: string[][]): Promise<Result<null>>
+  /** Dismiss a pending question (the assistant is told and continues without answers). */
+  chatRejectQuestion(requestID: string): Promise<Result<null>>
   getSetupStatus(): Promise<Result<SetupStatus>>
   /** Optional credential fields left blank = leave that provider's setup unchanged. */
   saveSetup(
@@ -283,6 +317,10 @@ export interface OpenGenieApi {
   onAssetPreview(cb: (preview: AssetPreview) => void): () => void
   /** Fired (debounced) when the AI edits project files during a response. */
   onChatFilesChanged(cb: () => void): () => void
+  /** The assistant asked interactive question(s) and is blocked on the reply. */
+  onChatQuestion(cb: (request: ChatQuestionRequest) => void): () => void
+  /** A pending question was resolved elsewhere (answered/rejected/expired). */
+  onChatQuestionDone(cb: (requestID: string) => void): () => void
 
   // Export
   exportGame(name: string, platforms: ExportPlatform[]): Promise<Result<null>>

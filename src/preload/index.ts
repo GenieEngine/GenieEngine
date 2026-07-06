@@ -41,6 +41,8 @@ const api: OpenGenieApi = {
   chatLoadState: (projectPath) => invoke('chat:loadState', projectPath),
   chatSaveHistory: (projectPath, messages) => invoke('chat:saveHistory', projectPath, messages),
   chatAppendInput: (projectPath, entry) => invoke('chat:appendInput', projectPath, entry),
+  chatAnswerQuestion: (requestID, answers) => invoke('chat:answerQuestion', requestID, answers),
+  chatRejectQuestion: (requestID) => invoke('chat:rejectQuestion', requestID),
   getSetupStatus: () => invoke('chat:setupStatus'),
   saveSetup: (provider, model, apiKey, tencentSecretId, tencentSecretKey, openaiApiKey, openaiModel) =>
     invoke('chat:saveSetup', provider, model, apiKey, tencentSecretId, tencentSecretKey, openaiApiKey, openaiModel),
@@ -48,6 +50,8 @@ const api: OpenGenieApi = {
   onChatDone: (cb) => subscribe('chat:done', cb),
   onAssetPreview: (cb) => subscribe('chat:asset-preview', cb),
   onChatFilesChanged: (cb) => subscribe('chat:files-changed', cb),
+  onChatQuestion: (cb) => subscribe('chat:question', cb),
+  onChatQuestionDone: (cb) => subscribe('chat:question-done', cb),
 
   exportGame: (name, platforms) => invoke('export:run', name, platforms),
   cancelExport: () => invoke('export:cancel'),
