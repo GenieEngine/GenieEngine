@@ -116,6 +116,18 @@ function handleEvent(evt: any): void {
     replyToPermission(props.sessionID, props.id, String(props.permission ?? ''))
   } else if (evt?.type === 'permission.v2.asked' && props.id && props.sessionID) {
     replyToPermission(props.sessionID, props.id, String(props.action ?? ''))
+  } else if (
+    (evt?.type === 'question.asked' || evt?.type === 'question.v2.asked') &&
+    props.id &&
+    props.sessionID === sessionID
+  ) {
+    // The "question" tool blocks the whole turn until it gets a reply — the
+    // renderer shows the options as buttons (see ChatPanel's question card).
+    // Both API generations carry identical payloads (id/sessionID/questions),
+    // same v1/v2 dance as the permission events above.
+    sendToRenderer('chat:question', { id: props.id, questions: props.questions ?? [] })
+  } else if (/^question\.(v2\.)?(replied|rejected)$/.test(evt?.type) && props.requestID) {
+    sendToRenderer('chat:question-done', props.requestID)
   } else if (evt?.type === 'message.updated' && props.info?.id) {
     messageRoles.set(props.info.id, props.info.role)
   } else if (evt?.type === 'message.part.updated') {
@@ -378,6 +390,49 @@ export function cancelChat(): void {
     cancelled = true
     void fetch(`${server.base}/session/${sessionID}/abort`, { method: 'POST' }).catch(() => {})
   }
+}
+
+/**
+ * A request is owned by whichever question-API generation created it, and the
+ * event doesn't say which — answer via the v1 route, falling back to v2.
+ */
+async function questionAction(requestID: string, action: 'reply' | 'reject', body: unknown): Promise<void> {
+  if (!server) throw new Error('The assistant is not running.')
+  try {
+    await api(server, 'POST', `/question/${requestID}/${action}`, body)
+  } catch {
+    await api(server, 'POST', `/api/session/${sessionID}/question/${requestID}/${action}`, body)
+  }
+}
+
+/** Deliver the user's answers for a pending question (unblocks the turn). */
+export async function answerQuestion(requestID: string, answers: string[][]): Promise<void> {
+  await questionAction(requestID, 'reply', { answers })
+}
+
+/** Dismiss a pending question — best-effort; the tool reports the dismissal to the model. */
+export async function rejectQuestion(requestID: string): Promise<void> {
+  if (!server) return
+  await questionAction(requestID, 'reject', {}).catch(() => {})
+}
+
+/**
+ * Questions still awaiting an answer in the current session. Lets a freshly
+ * (re)loaded window re-show the question card instead of leaving the turn
+ * stuck on a prompt that's no longer on screen.
+ */
+export async function pendingQuestion(): Promise<{ id: string; questions: unknown[] } | null> {
+  if (!server || !sessionID) return null
+  /* eslint-disable @typescript-eslint/no-explicit-any -- untyped server JSON */
+  const v1 = await api<any[]>(server, 'GET', '/question').catch(() => [])
+  const v2 = await api<{ data?: any[] }>(server, 'GET', `/api/session/${sessionID}/question`).catch(
+    () => ({}) as { data?: any[] }
+  )
+  /* eslint-enable @typescript-eslint/no-explicit-any */
+  const mine = [...(Array.isArray(v1) ? v1 : []), ...(v2.data ?? [])].find(
+    (r) => r?.sessionID === sessionID && r?.id
+  )
+  return mine ? { id: mine.id, questions: mine.questions ?? [] } : null
 }
 
 /** Start a fresh conversation in the same project (keeps the server warm). */

@@ -1768,6 +1768,117 @@ button:disabled {
   color: var(--red);
 }
 
+/* Interactive question from the assistant's "question" tool. */
+.question-card {
+  background: var(--bg-elevated);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  margin: 4px 0 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.question-card-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.question-dismiss {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  color: var(--text-faint);
+}
+.question-dismiss:hover {
+  background: var(--bg-active);
+  color: var(--red);
+}
+
+.question-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.question-text {
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.question-header-chip {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: rgba(124, 92, 255, 0.15);
+  color: var(--accent);
+  font-size: 10.5px;
+  font-weight: 600;
+  vertical-align: 1px;
+}
+
+.question-options {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.question-option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  text-align: left;
+  padding: 6px 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+.question-option:hover {
+  background: var(--bg-hover);
+  border-color: var(--accent);
+}
+.question-option.selected {
+  border-color: var(--accent);
+  background: rgba(124, 92, 255, 0.12);
+}
+
+.question-option-desc {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.question-custom-input {
+  width: 100%;
+  padding: 6px 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 12px;
+}
+.question-custom-input:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.question-submit {
+  align-self: flex-end;
+}
+
 /* Attachments shown on sent user messages. */
 .msg-attachments {
   display: flex;
