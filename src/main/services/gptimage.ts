@@ -10,20 +10,18 @@ import { assetDir, credentialsStore } from './asset-store'
  * optional-tool pattern as hy3d.ts.
  *
  * Fixed generation profile per product decision: single image, 1024×1024,
- * medium quality, transparent background, PNG. gpt-image-2 rejects
- * background=transparent (the API errors), so we default to gpt-image-1.5 —
- * the newest model that supports transparency, which game sprites need.
- * The model is overridable in the setup panel, in case a newer model adds
- * transparency support later.
+ * medium quality, transparent background, PNG. The model is pinned to
+ * gpt-image-1.5: gpt-image-2 rejects background=transparent (the API errors),
+ * so 1.5 is the newest model that supports transparency, which game sprites
+ * need.
  */
 
-export const DEFAULT_MODEL = 'gpt-image-1.5'
+export const IMAGE_MODEL = 'gpt-image-1.5'
 // Overridable for tests/proxies; the OpenAI SDK honors the same variable.
 const BASE_URL = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1'
 
 interface GptImageCredentials extends Record<string, string> {
   apiKey: string
-  model: string
 }
 
 const store = credentialsStore<GptImageCredentials>('gptimage-credentials.json')
@@ -32,24 +30,16 @@ export async function isGptImageConfigured(): Promise<boolean> {
   return store.isConfigured()
 }
 
-/** The configured model, or the default when nothing's been saved yet. */
-export async function getGptImageModel(): Promise<string> {
-  return (await store.load())?.model ?? DEFAULT_MODEL
-}
-
 /**
- * Save the API key and/or model — either may be blank to keep its current
- * stored value (the setup panel only reveals the key field when the user
- * asks to change it, so a blank key usually just means "unchanged").
- * No-ops if there's no key to attach a model to (nothing configured yet and
- * none provided now).
+ * Save the API key — blank keeps the current stored value (the setup panel
+ * only reveals the key field when the user asks to change it, so a blank key
+ * usually just means "unchanged"). No-ops when nothing is configured yet and
+ * no key was provided now.
  */
-export async function saveGptImageConfig(apiKey: string, model: string): Promise<void> {
-  const existing = await store.load()
-  const nextKey = apiKey.trim() || existing?.apiKey
-  if (!nextKey) return
-  const nextModel = model.trim() || existing?.model || DEFAULT_MODEL
-  await store.save({ apiKey: nextKey, model: nextModel })
+export async function saveGptImageConfig(apiKey: string): Promise<void> {
+  const key = apiKey.trim()
+  if (!key) return
+  await store.save({ apiKey: key })
 }
 
 export interface GenerateImageRequest {
@@ -80,9 +70,7 @@ export async function generateImageAsset(projectPath: string, request: GenerateI
       authorization: `Bearer ${creds.apiKey}`
     },
     body: JSON.stringify({
-      // Falls back for credential files saved before the model became
-      // configurable (they only have `apiKey`).
-      model: creds.model || DEFAULT_MODEL,
+      model: IMAGE_MODEL,
       prompt: request.prompt.trim(),
       n: 1,
       size: '1024x1024',

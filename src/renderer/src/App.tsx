@@ -45,6 +45,10 @@ export function App(): React.JSX.Element {
   // output. Persisted in the main-process settings file (not localStorage)
   // since it applies on the home page too, before any project is open.
   const [advancedMode, setAdvancedModeState] = useState(false)
+  // Drives whether `.titlebar` reserves room for the macOS traffic lights —
+  // they disappear in native fullscreen, so the reserved gap should too.
+  const [isFullScreen, setIsFullScreen] = useState(false)
+  useEffect(() => window.api.onFullscreenChange(setIsFullScreen), [])
   const setAdvancedMode = useCallback((value: boolean) => {
     setAdvancedModeState(value)
     void window.api.setAdvancedMode(value)
@@ -96,6 +100,7 @@ export function App(): React.JSX.Element {
         setGodotPath(state.godotPath)
         setOpencodePath(state.opencodePath)
         setAdvancedModeState(state.advancedMode)
+        setIsFullScreen(state.isFullScreen)
       }
       setBooted(true)
     })
@@ -166,7 +171,8 @@ export function App(): React.JSX.Element {
     window.addEventListener('mouseup', onUp)
   }, [])
 
-  const platformClass = window.api.platform === 'darwin' ? 'app mac' : 'app'
+  const platformClass =
+    window.api.platform === 'darwin' ? `app mac${isFullScreen ? ' fullscreen' : ''}` : 'app'
 
   if (!booted) return <div className={platformClass} />
 

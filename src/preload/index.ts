@@ -23,6 +23,7 @@ const api: OpenGenieApi = {
   openProjectDialog: () => invoke('project:openDialog'),
   closeProject: () => invoke('project:close'),
   setAdvancedMode: (value) => invoke('app:setAdvancedMode', value),
+  onFullscreenChange: (cb) => subscribe('window:fullscreenChange', cb),
 
   playGame: () => invoke('game:play'),
   stopGame: () => invoke('game:stop'),
@@ -44,8 +45,8 @@ const api: OpenGenieApi = {
   chatAnswerQuestion: (requestID, answers) => invoke('chat:answerQuestion', requestID, answers),
   chatRejectQuestion: (requestID) => invoke('chat:rejectQuestion', requestID),
   getSetupStatus: () => invoke('chat:setupStatus'),
-  saveSetup: (provider, model, apiKey, tencentSecretId, tencentSecretKey, openaiApiKey, openaiModel) =>
-    invoke('chat:saveSetup', provider, model, apiKey, tencentSecretId, tencentSecretKey, openaiApiKey, openaiModel),
+  saveSetup: (endpoint, model, apiKey, tencentSecretId, tencentSecretKey, openaiApiKey) =>
+    invoke('chat:saveSetup', endpoint, model, apiKey, tencentSecretId, tencentSecretKey, openaiApiKey),
   onChatPart: (cb) => subscribe('chat:part', cb),
   onChatDone: (cb) => subscribe('chat:done', cb),
   onAssetPreview: (cb) => subscribe('chat:asset-preview', cb),

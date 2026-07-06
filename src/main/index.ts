@@ -7,7 +7,7 @@ import { shutdownChat } from './services/opencode'
 import { ensureOpencodeMcpConfig } from './services/opencode-config'
 import { startTestHarness, stopTestHarness } from './services/test-harness'
 import { loadSettings } from './state'
-import { setMainWindow } from './window'
+import { sendToRenderer, setMainWindow } from './window'
 
 // Keeps the userData (settings) folder stable between dev and packaged runs.
 app.setName('OpenGenie')
@@ -31,6 +31,12 @@ function createWindow(): void {
 
   setMainWindow(win)
   win.on('ready-to-show', () => win.show())
+
+  // The macOS traffic lights (hiddenInset title bar) disappear in native
+  // fullscreen — the renderer needs to know so it can collapse the padding
+  // it otherwise reserves for them (see `.mac .titlebar` in global.css).
+  win.on('enter-full-screen', () => sendToRenderer('window:fullscreenChange', true))
+  win.on('leave-full-screen', () => sendToRenderer('window:fullscreenChange', false))
 
   // Any external link (e.g. opencode.ai in error hints) opens in the browser.
   win.webContents.setWindowOpenHandler(({ url }) => {

@@ -127,6 +127,23 @@ export function agentsMd(name: string): string {
 
 This is a **Godot 4** game project created with **OpenGenie**, an AI-powered game engine.
 
+## Scope — you build Godot games, nothing else
+
+OpenGenie creates video games with the Godot engine; that is the ONLY thing you can
+build. When a request falls outside that, push back honestly instead of attempting it:
+
+- **Not a game at all** (a website, web app, mobile app, chatbot, script, ...): say
+  plainly that OpenGenie only makes games and you can't build that here.
+- **A game aimed at another platform or engine** (a WeChat mini-game, a Roblox
+  experience, a Unity/Unreal project, ...): offer to build the same game in Godot
+  instead — the gameplay they want almost always translates.
+
+Never assume the user knows what Godot is. When it comes up, introduce it in a sentence
+or two of plain language: Godot is a free, open-source game engine behind thousands of
+shipped commercial games; it handles both 2D and 3D, and a single project exports to
+Windows, macOS, Linux, phones, and the web. Then move the conversation forward to what
+their game should be, and build it.
+
 ## Ground rules
 
 - The playable entry scene is \`main.tscn\` (configured as \`run/main_scene\`); its script is \`main.gd\`.
@@ -137,6 +154,22 @@ This is a **Godot 4** game project created with **OpenGenie**, an AI-powered gam
 - For art, prefer simple generated assets (SVG/PNG) committed to the repository.
 - You have \`websearch\` and \`webfetch\` tools — use them to look up Godot 4 APIs, GDScript
   idioms, or game-design references when you're unsure, instead of guessing.
+
+## Reference screenshots & images
+
+Users attach screenshots and reference images (games they like, sketches, mock-ups) to
+their messages. An attached image is a design brief — study it closely before writing
+code or generating art, and keep referring back to it:
+
+- **Art**: match the image's art style, color palette, proportions, lighting, and mood in
+  every asset you create. Put those specifics into your generation prompts (e.g. "16-bit
+  pixel art, dusk palette of deep purples and orange highlights, chunky outlines") rather
+  than generic descriptions.
+- **Game logic**: read the genre, camera perspective, controls, HUD layout, and visible
+  mechanics out of the screenshot and build those — don't substitute a generic version of
+  the genre.
+- When the goal is "make it look like this", verify it does: take a \`game_screenshot\`
+  and compare it against the reference before reporting back.
 
 ## Architecture — Entity Component System (required)
 
@@ -163,6 +196,13 @@ Rules:
 - \`main.tscn\` stays the entry scene: it instantiates entities and hosts the systems.
 
 ## Art & 3D assets
+
+**Art comes first.** The FIRST playable version of a game must already look good — never
+deliver a gray-box build of bare rectangles and default labels. Create the art a feature
+needs (player, enemies, items, background, UI) before or alongside its gameplay code, and
+build the scenes with those assets from the start. Use the generation tools below when
+they're available; when they're not, craft the art yourself (SVG/PNG sprites, styled
+Godot primitives) — missing tools are not a reason to ship an empty-looking game.
 
 All art lives under \`assets/\`, in sub-folders that mirror the ECS structure — an asset
 sits under the same category as the code that owns it:

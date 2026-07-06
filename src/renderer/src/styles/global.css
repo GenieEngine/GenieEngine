@@ -136,9 +136,14 @@ body.resizing-v {
   z-index: 50;
 }
 
-/* Leave room for macOS traffic lights (hiddenInset title bar). */
+/* Leave room for macOS traffic lights (hiddenInset title bar). They're
+   hidden in native fullscreen, so `.fullscreen` collapses the gap back to
+   the default padding instead of leaving it empty. */
 .mac .titlebar {
   padding-left: 84px;
+}
+.mac.fullscreen .titlebar {
+  padding-left: 14px;
 }
 
 .titlebar button,
@@ -146,11 +151,18 @@ body.resizing-v {
   -webkit-app-region: no-drag;
 }
 
+/* The whole button-row sections are excluded from the drag region (not just
+   the buttons themselves) — Chromium's cursor/hover updates are flaky right
+   at drag/no-drag boundaries, so packing several no-drag buttons a few px
+   apart inside a drag region made the pointer cursor flicker or stick to the
+   window's default arrow between them. Only the genuinely empty header
+   space between these sections stays draggable. */
 .titlebar-left {
   display: flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
+  -webkit-app-region: no-drag;
 }
 
 .titlebar-center {
@@ -159,12 +171,14 @@ body.resizing-v {
   transform: translateX(-50%);
   display: flex;
   align-items: center;
+  -webkit-app-region: no-drag;
 }
 
 .titlebar-right {
   margin-left: auto;
   display: flex;
   align-items: center;
+  -webkit-app-region: no-drag;
   gap: 8px;
 }
 
@@ -344,7 +358,7 @@ button:disabled {
   border: 1px solid var(--border-strong);
   transition: background 0.12s ease, border-color 0.12s ease;
 }
-.toggle-switch:hover {
+.toggle-row:hover .toggle-switch {
   border-color: var(--text-faint);
 }
 .toggle-switch.on {
@@ -392,6 +406,7 @@ button:disabled {
   font-size: 12px;
   font-weight: 400;
   line-height: 1.45;
+  text-align: left;
   cursor: default;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
   z-index: 200;
@@ -1637,6 +1652,20 @@ button:disabled {
   font-style: italic;
 }
 
+/* One-line window onto the newest end of the thinking stream: the rtl
+   direction anchors the clipped side to the LEFT (ellipsis there), so the
+   freshest text on the right stays visible as it streams; the <bdi> child
+   keeps the text itself rendering left-to-right. */
+.thinking-preview {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+}
+
 .typing-dots {
   display: inline-flex;
   gap: 4px;
@@ -2627,11 +2656,13 @@ button:disabled {
 }
 
 /* ==========================================================================
-   AI settings additions — reopenable panel + optional Tencent HY 3D section
+   AI settings additions — reopenable panel + tabbed sections (coding agent /
+   2D asset generation / 3D asset generation)
    ========================================================================== */
 
 .setup-card {
   position: relative; /* anchors .setup-close */
+  max-width: 460px; /* roomier than the base card so three tab labels fit */
   max-height: calc(100vh - 140px);
   overflow-y: auto;
 }
@@ -2642,20 +2673,28 @@ button:disabled {
   right: 10px;
 }
 
-.setup-section {
+.setup-tabs {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
-  border-top: 1px solid var(--border);
-  padding-top: 12px;
+  border-bottom: 1px solid var(--border);
 }
 
-.setup-section-title {
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
+.setup-tab {
+  flex: 1;
+  padding: 7px 4px;
   color: var(--text-dim);
+  font-weight: 600;
+  font-size: 11px;
+  line-height: 1.3;
+  text-align: center;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+.setup-tab:hover {
+  color: var(--text);
+}
+.setup-tab.active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
 }
 
 /* ==========================================================================
