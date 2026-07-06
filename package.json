@@ -42,6 +42,7 @@
     "directories": {
       "output": "dist"
     },
+    "afterAllArtifactBuild": "scripts/set-dmg-icon.js",
     "files": [
       "!src/**",
       "!scripts/**",

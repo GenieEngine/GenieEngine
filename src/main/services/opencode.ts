@@ -36,6 +36,13 @@ let cancelled = false
 let filesChangedTimer: ReturnType<typeof setTimeout> | null = null
 /** Roles by messageID — parts carry no role, so user echoes must be filtered. */
 const messageRoles = new Map<string, string>()
+/**
+ * Accumulated text of streaming parts in the current turn, by partID.
+ * message.part.updated only snapshots a part (empty on creation, full on
+ * completion) — the characters in between arrive as message.part.delta
+ * appends, so without this cache text and thinking would not stream at all.
+ */
+const partCache = new Map<string, ChatPartUpdate>()
 
 function getFreePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -91,7 +98,13 @@ function translatePart(part: any): ChatPartUpdate | null {
       messageID: part.messageID,
       partID: part.id,
       kind: 'tool',
-      tool: { name: part.tool ?? 'tool', status, title: String(title).slice(0, 200) }
+      tool: {
+        name: part.tool ?? 'tool',
+        status,
+        title: String(title).slice(0, 200),
+        // Why the call failed — shown as a tooltip on the red ✗ chip.
+        error: status === 'error' && state.error ? String(state.error).slice(0, 500) : undefined
+      }
     }
   }
   return null // step-start / step-finish / snapshot etc. — not user-facing
@@ -135,7 +148,16 @@ function handleEvent(evt: any): void {
     // The user's own message echoes back as a text part — skip it.
     if (messageRoles.get(props.part.messageID) === 'user') return
     const update = translatePart(props.part)
-    if (update) sendToRenderer('chat:part', update)
+    if (update) {
+      if (update.kind === 'text' || update.kind === 'reasoning') partCache.set(update.partID, update)
+      sendToRenderer('chat:part', update)
+    }
+  } else if (evt?.type === 'message.part.delta') {
+    if (!sessionID || props.sessionID !== sessionID || props.field !== 'text') return
+    const cached = partCache.get(props.partID)
+    if (!cached) return // part not announced (or not a streaming kind) — skip
+    cached.text = (cached.text ?? '') + String(props.delta ?? '')
+    sendToRenderer('chat:part', { ...cached })
   } else if (evt?.type === 'file.edited') {
     // The agent touched a project file — nudge the Files/Git panels (debounced).
     if (filesChangedTimer) clearTimeout(filesChangedTimer)
@@ -342,6 +364,8 @@ export async function sendChatMessage(
 
   busy = true
   cancelled = false
+  // Parts of finished turns are final — only the live turn needs delta state.
+  partCache.clear()
   const currentSession = sessionID
 
   // Attachments travel as data-URL file parts in the message itself —
@@ -464,5 +488,6 @@ export function shutdownChat(): void {
   sessionRestored = false
   busy = false
   messageRoles.clear()
+  partCache.clear()
   killServer()
 }

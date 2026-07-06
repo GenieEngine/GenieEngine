@@ -1,6 +1,15 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { FileEntry, ProjectInfo } from '../../../shared/types'
-import { ChevronIcon, CollapseAllIcon, ExternalIcon, FileIcon, FolderIcon, FolderOpenIcon, RefreshIcon } from './Icons'
+import {
+  ChevronIcon,
+  CollapseAllIcon,
+  FileIcon,
+  FolderIcon,
+  FolderOpenIcon,
+  GodotLogoIcon,
+  RefreshIcon,
+  VSCodeLogoIcon
+} from './Icons'
 
 interface Props {
   project: ProjectInfo
@@ -133,10 +142,10 @@ export function FilesPanel({ project, refreshToken }: Props): React.JSX.Element 
 
       <div className="open-btns">
         <button className="open-btn" onClick={() => void openExternal('vscode')}>
-          <ExternalIcon size={12} /> VS Code
+          <VSCodeLogoIcon size={14} /> VS Code
         </button>
         <button className="open-btn" onClick={() => void openExternal('godot')}>
-          <ExternalIcon size={12} /> Godot Editor
+          <GodotLogoIcon size={14} /> Godot Editor
         </button>
       </div>
 

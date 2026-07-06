@@ -22,7 +22,7 @@ interface AssistantPart {
   id: string
   kind: 'text' | 'reasoning' | 'tool' | 'image' | 'asset'
   text: string
-  tool?: { name: string; status: ChatToolStatus; title?: string }
+  tool?: { name: string; status: ChatToolStatus; title?: string; error?: string }
   dataUrl?: string
   /** For kind 'asset': the generated 2D/3D asset preview the user can react to. */
   asset?: AssetPreview
@@ -64,7 +64,8 @@ function sanitizeRestored(raw: unknown[]): ChatMessage[] {
     if (typeof m.id !== 'string' || (m.role !== 'user' && m.role !== 'assistant' && m.role !== 'error')) continue
     const parts = Array.isArray(m.parts)
       ? m.parts
-          .filter((p) => p && typeof p.id === 'string')
+          // Reasoning is live-only UI; drop any saved by older builds too.
+          .filter((p) => p && typeof p.id === 'string' && p.kind !== 'reasoning')
           .map((p) =>
             p.kind === 'tool' && p.tool && (p.tool.status === 'running' || p.tool.status === 'pending')
               ? { ...p, tool: { ...p.tool, status: 'completed' as ChatToolStatus } }
@@ -80,6 +81,18 @@ function sanitizeRestored(raw: unknown[]): ChatMessage[] {
     })
   }
   return messages
+}
+
+/**
+ * Live-only parts (the streaming thinking preview) must not reach the saved
+ * transcript: they're noise on restore and can carry a lot of text.
+ */
+function stripEphemeral(messages: ChatMessage[]): ChatMessage[] {
+  return messages.map((m) =>
+    m.parts?.some((p) => p.kind === 'reasoning')
+      ? { ...m, parts: m.parts.filter((p) => p.kind !== 'reasoning') }
+      : m
+  )
 }
 
 function readFileAsDataUrl(file: File): Promise<string> {
@@ -142,8 +155,10 @@ function toolLabel(tool: { name: string; title?: string }): string {
 
 function ToolChip({ part }: { part: AssistantPart }): React.JSX.Element {
   const status = part.tool?.status ?? 'running'
+  // Failed calls explain themselves on hover (native tooltip).
+  const tooltip = status === 'error' ? `Failed: ${part.tool?.error || 'no error details reported'}` : undefined
   return (
-    <span className={`tool-chip ${status}`}>
+    <span className={`tool-chip ${status}`} title={tooltip}>
       <span className="tool-chip-icon">{toolIcon(part.tool?.name ?? '')}</span>
       <span className="tool-chip-label">{toolLabel(part.tool ?? { name: 'tool' })}</span>
       <span className="tool-chip-status">
@@ -214,9 +229,21 @@ function AssistantMessage({
         </div>
       )
     } else if (part.kind === 'reasoning' && msg.streaming && part === last) {
+      // Live preview of the model's thinking: one line showing the newest
+      // tail of the reasoning stream, replaced in place as more arrives, so
+      // long silent stretches still visibly make progress. Never persisted —
+      // see stripEphemeral.
+      const tail = part.text.replace(/\s+/g, ' ').trim().slice(-300)
       blocks.push(
         <div key={part.id} className="thinking-line">
-          <span className="spinner" /> Thinking…
+          <span className="spinner" />
+          {tail ? (
+            <span className="thinking-preview">
+              <bdi>{tail}</bdi>
+            </span>
+          ) : (
+            'Thinking…'
+          )}
         </div>
       )
     }
@@ -416,7 +443,7 @@ export function ChatPanel({ projectPath, opencodeAvailable, onAssistantDone }: P
     if (!canSave || streaming || messages.length === 0 || messages === lastSavedRef.current) return
     saveTimerRef.current = setTimeout(() => {
       lastSavedRef.current = messages
-      void window.api.chatSaveHistory(projectPath, messages)
+      void window.api.chatSaveHistory(projectPath, stripEphemeral(messages))
     }, 400)
     return cancelPendingSave
   }, [messages, streaming, canSave, projectPath])

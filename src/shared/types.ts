@@ -20,6 +20,8 @@ export interface InitialState {
   opencodePath: string | null
   /** Whether the ECS viewer, files/git sidebars and console output are shown. */
   advancedMode: boolean
+  /** Whether the window is currently in native (macOS green-button) fullscreen. */
+  isFullScreen: boolean
 }
 
 export interface FileEntry {
@@ -114,18 +116,17 @@ export interface ChatQuestionRequest {
   questions: ChatQuestion[]
 }
 
-/** State of the AI provider setup (API key / provider / model). */
+/** State of the AI provider setup (API key / endpoint / model). */
 export interface SetupStatus {
-  /** True once the configured provider has a usable credential. */
+  /** True once the configured endpoint has a usable credential. */
   configured: boolean
-  provider: string
+  /** Base URL of the OpenAI-compatible API the coding agent talks to. */
+  endpoint: string
   model: string
   /** True when Tencent HY 3D credentials are stored (enables 3D asset generation). */
   hy3dConfigured: boolean
   /** True when an OpenAI key is stored (enables 2D image asset generation). */
   gptImageConfigured: boolean
-  /** The configured (or default) model used for 2D image generation. */
-  gptImageModel: string
 }
 
 /** A generated asset preview pushed into the chat so the user can react to it. */
@@ -156,6 +157,8 @@ export interface ChatPartUpdate {
     name: string
     status: ChatToolStatus
     title?: string
+    /** Failure reason when status is 'error' — tooltip on the chip. */
+    error?: string
   }
 }
 
@@ -263,6 +266,8 @@ export interface OpenGenieApi {
   closeProject(): Promise<Result<null>>
   /** Persists whether advanced panels (ECS viewer, files, git, console) are shown. */
   setAdvancedMode(value: boolean): Promise<Result<null>>
+  /** Fires when the window enters/exits native (macOS green-button) fullscreen. */
+  onFullscreenChange(cb: (isFullScreen: boolean) => void): () => void
 
   // Game (Godot)
   playGame(): Promise<Result<null>>
@@ -303,13 +308,12 @@ export interface OpenGenieApi {
   getSetupStatus(): Promise<Result<SetupStatus>>
   /** Optional credential fields left blank = leave that provider's setup unchanged. */
   saveSetup(
-    provider: string,
+    endpoint: string,
     model: string,
     apiKey: string,
     tencentSecretId?: string,
     tencentSecretKey?: string,
-    openaiApiKey?: string,
-    openaiModel?: string
+    openaiApiKey?: string
   ): Promise<Result<SetupStatus>>
   onChatPart(cb: (part: ChatPartUpdate) => void): () => void
   onChatDone(cb: (payload: ChatDonePayload) => void): () => void

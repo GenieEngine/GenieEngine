@@ -9,6 +9,14 @@ interface Props {
   onClose?: () => void
 }
 
+type SetupTab = 'agent' | '2d' | '3d'
+
+const TABS: { id: SetupTab; label: string }[] = [
+  { id: 'agent', label: 'Coding Agent' },
+  { id: '2d', label: '2D Asset Generation (Optional)' },
+  { id: '3d', label: '3D Asset Generation (Optional)' }
+]
+
 /**
  * Stands in for a credential input once it's already configured, so a
  * stored key is never blanked out by opening the panel and hitting Save —
@@ -24,19 +32,19 @@ function ConfiguredButton({ onClick }: { onClick: () => void }): React.JSX.Eleme
 
 /**
  * AI provider setup, shown over a darkened chat until the assistant is
- * connected (and reopenable later from the sidebar gear). Collects provider
- * (endpoint), model and API key — defaults to OpenRouter + Kimi K2.7 Code —
- * plus optional Tencent HY 3D credentials that enable the 3D asset
- * generation tool.
+ * connected (and reopenable later from the sidebar gear). Three tabs:
+ * the coding agent (any OpenAI-compatible endpoint + model + key, defaults
+ * to OpenRouter + Kimi K2.7 Code), optional 2D asset generation (OpenAI
+ * gpt-image-1.5) and optional 3D asset generation (Tencent HY 3D).
  */
 export function SetupOverlay({ status, onConfigured, onClose }: Props): React.JSX.Element {
-  const [provider, setProvider] = useState(status.provider)
+  const [tab, setTab] = useState<SetupTab>('agent')
+  const [endpoint, setEndpoint] = useState(status.endpoint)
   const [model, setModel] = useState(status.model)
   const [apiKey, setApiKey] = useState('')
   const [tencentId, setTencentId] = useState('')
   const [tencentKey, setTencentKey] = useState('')
   const [openaiKey, setOpenaiKey] = useState('')
-  const [openaiModel, setOpenaiModel] = useState(status.gptImageModel)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -47,20 +55,27 @@ export function SetupOverlay({ status, onConfigured, onClose }: Props): React.JS
   const [tencentRevealed, setTencentRevealed] = useState(!status.hy3dConfigured)
   const [openaiKeyRevealed, setOpenaiKeyRevealed] = useState(!status.gptImageConfigured)
 
+  // Save applies every tab at once, so a validation error may concern a tab
+  // the user isn't looking at — switch to it so the message makes sense.
+  const fail = (message: string, where: SetupTab): void => {
+    setError(message)
+    setTab(where)
+  }
+
   const save = async (): Promise<void> => {
     // A provider key is only mandatory on first-time setup; when reopened via
-    // the gear the user may just be adding Tencent credentials.
+    // the gear the user may just be adding asset-generation credentials.
     if (!apiKey.trim() && !status.configured) {
-      setError('An API key is required to connect the assistant.')
+      fail('An API key is required to connect the assistant.', 'agent')
       return
     }
     if (!!tencentId.trim() !== !!tencentKey.trim()) {
-      setError('Enter both the Tencent SecretId and SecretKey (or leave both blank).')
+      fail('Enter both the Tencent SecretId and SecretKey (or leave both blank).', '3d')
       return
     }
     setBusy(true)
     setError(null)
-    const result = await window.api.saveSetup(provider, model, apiKey, tencentId, tencentKey, openaiKey, openaiModel)
+    const result = await window.api.saveSetup(endpoint, model, apiKey, tencentId, tencentKey, openaiKey)
     setBusy(false)
     if (!result.ok) {
       setError(result.error)
@@ -68,7 +83,7 @@ export function SetupOverlay({ status, onConfigured, onClose }: Props): React.JS
       onConfigured(result.data)
       onClose?.()
     } else {
-      setError('That provider still has no usable credential — double-check the API key.')
+      setError('That endpoint still has no usable credential — double-check the API key.')
     }
   }
 
@@ -87,141 +102,153 @@ export function SetupOverlay({ status, onConfigured, onClose }: Props): React.JS
           <div>
             <h2 className="setup-title">{status.configured ? 'AI settings' : 'Connect your AI assistant'}</h2>
             <p className="setup-sub">
-              OpenGenie's assistant is powered by OpenCode. Choose a provider and model and paste an
-              API key to get started.
+              OpenGenie's assistant is powered by OpenCode. Point it at an API endpoint and paste a
+              key to get started.
             </p>
           </div>
         </div>
 
-        <label className="setup-field">
-          <span className="setup-label">Provider</span>
-          <input
-            className="text-input"
-            value={provider}
-            spellCheck={false}
-            autoCapitalize="off"
-            onChange={(e) => setProvider(e.target.value)}
-            placeholder="openrouter"
-          />
-        </label>
-
-        <label className="setup-field">
-          <span className="setup-label">Model</span>
-          <input
-            className="text-input"
-            value={model}
-            spellCheck={false}
-            autoCapitalize="off"
-            onChange={(e) => setModel(e.target.value)}
-            placeholder="moonshotai/kimi-k2.7-code"
-          />
-        </label>
-
-        <div className="setup-field">
-          <span className="setup-label">API key</span>
-          {status.configured && !providerKeyRevealed ? (
-            <ConfiguredButton onClick={() => setProviderKeyRevealed(true)} />
-          ) : (
-            <input
-              className="text-input"
-              type="password"
-              value={apiKey}
-              spellCheck={false}
-              autoComplete="off"
-              autoFocus={status.configured}
-              onChange={(e) => setApiKey(e.target.value)}
-              placeholder={status.configured ? 'Leave blank to keep the stored key' : `Your ${provider || 'provider'} API key`}
-            />
-          )}
-          <span className="setup-hint">
-            Stored locally in OpenCode's credential file — it never leaves your machine or enters
-            your game's code.
-          </span>
+        <div className="setup-tabs" role="tablist">
+          {TABS.map(({ id, label }) => (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              aria-selected={tab === id}
+              className={`setup-tab${tab === id ? ' active' : ''}`}
+              onClick={() => setTab(id)}
+            >
+              {label}
+            </button>
+          ))}
         </div>
 
-        <div className="setup-section">
-          <span className="setup-section-title">3D asset generation · optional</span>
-          <span className="setup-hint">
-            Add Tencent Cloud credentials to let the assistant generate 3D models with Tencent HY 3D
-            (saved into your game's assets folder). Without them the assistant simply won't have the
-            tool.
-          </span>
-        </div>
-
-        {status.hy3dConfigured && !tencentRevealed ? (
-          <div className="setup-field">
-            <span className="setup-label">Tencent credentials</span>
-            <ConfiguredButton onClick={() => setTencentRevealed(true)} />
-          </div>
-        ) : (
+        {tab === 'agent' && (
           <>
             <label className="setup-field">
-              <span className="setup-label">Tencent SecretId</span>
+              <span className="setup-label">API endpoint</span>
               <input
                 className="text-input"
-                value={tencentId}
+                value={endpoint}
                 spellCheck={false}
                 autoCapitalize="off"
-                autoComplete="off"
-                autoFocus={status.hy3dConfigured}
-                onChange={(e) => setTencentId(e.target.value)}
-                placeholder={status.hy3dConfigured ? 'Leave blank to keep the stored value' : 'AKID…'}
+                onChange={(e) => setEndpoint(e.target.value)}
+                placeholder="https://openrouter.ai/api/v1"
               />
+              <span className="setup-hint">Any OpenAI-compatible API endpoint will work.</span>
             </label>
 
             <label className="setup-field">
-              <span className="setup-label">Tencent SecretKey</span>
+              <span className="setup-label">Model</span>
               <input
                 className="text-input"
-                type="password"
-                value={tencentKey}
+                value={model}
                 spellCheck={false}
-                autoComplete="off"
-                onChange={(e) => setTencentKey(e.target.value)}
-                placeholder={status.hy3dConfigured ? 'Leave blank to keep the stored value' : 'Your Tencent Cloud SecretKey'}
+                autoCapitalize="off"
+                onChange={(e) => setModel(e.target.value)}
+                placeholder="moonshotai/kimi-k2.7-code"
               />
             </label>
+
+            <div className="setup-field">
+              <span className="setup-label">API key</span>
+              {status.configured && !providerKeyRevealed ? (
+                <ConfiguredButton onClick={() => setProviderKeyRevealed(true)} />
+              ) : (
+                <input
+                  className="text-input"
+                  type="password"
+                  value={apiKey}
+                  spellCheck={false}
+                  autoComplete="off"
+                  autoFocus={status.configured}
+                  onChange={(e) => setApiKey(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && void save()}
+                  placeholder={status.configured ? 'Leave blank to keep the stored key' : 'Your API key'}
+                />
+              )}
+              <span className="setup-hint">
+                Stored locally in OpenCode's credential file — it never leaves your machine or
+                enters your game's code.
+              </span>
+            </div>
           </>
         )}
 
-        <div className="setup-section">
-          <span className="setup-section-title">2D image generation · optional</span>
-          <span className="setup-hint">
-            Add an OpenAI API key to let the assistant generate 2D art — sprites, icons, UI — as
-            transparent 1024×1024 PNGs saved into your game's assets folder.
-          </span>
-        </div>
+        {tab === '2d' && (
+          <>
+            <span className="setup-hint">
+              Add an OpenAI API key to let the assistant generate 2D art — sprites, icons, UI — as
+              transparent 1024×1024 PNGs saved into your game's assets folder. Only OpenAI's
+              gpt-image-1.5 model is supported right now.
+            </span>
 
-        <label className="setup-field">
-          <span className="setup-label">Model</span>
-          <input
-            className="text-input"
-            value={openaiModel}
-            spellCheck={false}
-            autoCapitalize="off"
-            onChange={(e) => setOpenaiModel(e.target.value)}
-            placeholder="gpt-image-1.5"
-          />
-        </label>
+            <div className="setup-field">
+              <span className="setup-label">OpenAI API key</span>
+              {status.gptImageConfigured && !openaiKeyRevealed ? (
+                <ConfiguredButton onClick={() => setOpenaiKeyRevealed(true)} />
+              ) : (
+                <input
+                  className="text-input"
+                  type="password"
+                  value={openaiKey}
+                  spellCheck={false}
+                  autoComplete="off"
+                  autoFocus={status.gptImageConfigured}
+                  onChange={(e) => setOpenaiKey(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && void save()}
+                  placeholder={status.gptImageConfigured ? 'Leave blank to keep the stored key' : 'sk-…'}
+                />
+              )}
+            </div>
+          </>
+        )}
 
-        <div className="setup-field">
-          <span className="setup-label">OpenAI API key</span>
-          {status.gptImageConfigured && !openaiKeyRevealed ? (
-            <ConfiguredButton onClick={() => setOpenaiKeyRevealed(true)} />
-          ) : (
-            <input
-              className="text-input"
-              type="password"
-              value={openaiKey}
-              spellCheck={false}
-              autoComplete="off"
-              autoFocus={status.gptImageConfigured}
-              onChange={(e) => setOpenaiKey(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && void save()}
-              placeholder={status.gptImageConfigured ? 'Leave blank to keep the stored key' : 'sk-…'}
-            />
-          )}
-        </div>
+        {tab === '3d' && (
+          <>
+            <span className="setup-hint">
+              Add Tencent Cloud credentials to let the assistant generate 3D models saved into your
+              game's assets folder. Only Tencent's HY 3D model is supported right now.
+            </span>
+
+            {status.hy3dConfigured && !tencentRevealed ? (
+              <div className="setup-field">
+                <span className="setup-label">Tencent credentials</span>
+                <ConfiguredButton onClick={() => setTencentRevealed(true)} />
+              </div>
+            ) : (
+              <>
+                <label className="setup-field">
+                  <span className="setup-label">Tencent SecretId</span>
+                  <input
+                    className="text-input"
+                    value={tencentId}
+                    spellCheck={false}
+                    autoCapitalize="off"
+                    autoComplete="off"
+                    autoFocus={status.hy3dConfigured}
+                    onChange={(e) => setTencentId(e.target.value)}
+                    placeholder={status.hy3dConfigured ? 'Leave blank to keep the stored value' : 'AKID…'}
+                  />
+                </label>
+
+                <label className="setup-field">
+                  <span className="setup-label">Tencent SecretKey</span>
+                  <input
+                    className="text-input"
+                    type="password"
+                    value={tencentKey}
+                    spellCheck={false}
+                    autoComplete="off"
+                    onChange={(e) => setTencentKey(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && void save()}
+                    placeholder={status.hy3dConfigured ? 'Leave blank to keep the stored value' : 'Your Tencent Cloud SecretKey'}
+                  />
+                </label>
+              </>
+            )}
+          </>
+        )}
 
         {error && <div className="error-banner small">{error}</div>}
 

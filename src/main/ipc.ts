@@ -31,6 +31,7 @@ import {
   setCurrentProject,
   setGodotPath
 } from './state'
+import { getMainWindow } from './window'
 
 /**
  * Every handler is wrapped in a Result envelope so expected failures (godot
@@ -64,7 +65,8 @@ export function registerIpcHandlers(): void {
       recentProjects: recents,
       godotPath: await resolveGodot(),
       opencodePath: await resolveOpencode(),
-      advancedMode: getAdvancedMode()
+      advancedMode: getAdvancedMode(),
+      isFullScreen: getMainWindow()?.isFullScreen() ?? false
     }
   })
 
@@ -165,15 +167,14 @@ export function registerIpcHandlers(): void {
   handle(
     'chat:saveSetup',
     async (
-      provider: string,
+      endpoint: string,
       model: string,
       apiKey: string,
       tencentSecretId?: string,
       tencentSecretKey?: string,
-      openaiApiKey?: string,
-      openaiModel?: string
+      openaiApiKey?: string
     ) => {
-      await saveSetup(provider, model, apiKey, tencentSecretId, tencentSecretKey, openaiApiKey, openaiModel)
+      await saveSetup(endpoint, model, apiKey, tencentSecretId, tencentSecretKey, openaiApiKey)
       return getSetupStatus()
     }
   )

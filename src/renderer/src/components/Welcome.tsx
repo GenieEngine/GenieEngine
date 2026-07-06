@@ -77,7 +77,7 @@ export function Welcome({
             <AdvancedToggle value={advancedMode} onChange={onToggleAdvancedMode} />
             <button
               className="icon-btn"
-              title="AI settings (provider, model, 3D asset generation)"
+              title="AI settings (coding agent, 2D & 3D asset generation)"
               onClick={onOpenSettings}
             >
               <GearIcon size={16} />
