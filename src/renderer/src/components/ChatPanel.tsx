@@ -95,6 +95,22 @@ function stripEphemeral(messages: ChatMessage[]): ChatMessage[] {
   )
 }
 
+/**
+ * Heuristic for "the AI provider couldn't be reached": the error strings
+ * Node/undici/OpenCode produce for DNS, socket and timeout failures. Used to
+ * tell a dropped connection apart from a real model/tooling error, so the
+ * chat can offer to continue the interrupted turn instead of just showing a
+ * raw failure. (navigator.onLine alone isn't enough — a router that's up but
+ * without internet keeps it true.)
+ */
+const NETWORK_ERROR_RE =
+  /fetch failed|network|ENOTFOUND|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|EHOSTUNREACH|ENETUNREACH|socket|UND_ERR/i
+
+/** Message shown in place of the raw error when a turn dies to a lost connection. */
+const DISCONNECTED_NOTICE =
+  'Disconnected — the internet connection was lost while the assistant was working. ' +
+  'Once you are back online, press Continue (or say "continue") to pick up where it left off.'
+
 function readFileAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
@@ -151,6 +167,20 @@ function toolLabel(tool: { name: string; title?: string }): string {
   if (title.length > 40) title = title.slice(0, 39) + '…'
   const name = tool.name.replace(/^opengenie_/, '')
   return title ? `${name} · ${title}` : name
+}
+
+/**
+ * "Thinking… Ns" with a live seconds counter — the fallback face of the
+ * thinking line when the model's reasoning text isn't available (some
+ * providers keep it encrypted), so the chat still visibly makes progress.
+ */
+function ThinkingTicker(): React.JSX.Element {
+  const [seconds, setSeconds] = useState(0)
+  useEffect(() => {
+    const timer = setInterval(() => setSeconds((s) => s + 1), 1000)
+    return () => clearInterval(timer)
+  }, [])
+  return <span>Thinking…{seconds >= 2 ? ` ${seconds}s` : ''}</span>
 }
 
 function ToolChip({ part }: { part: AssistantPart }): React.JSX.Element {
@@ -242,7 +272,7 @@ function AssistantMessage({
               <bdi>{tail}</bdi>
             </span>
           ) : (
-            'Thinking…'
+            <ThinkingTicker key={part.id} />
           )}
         </div>
       )
@@ -390,6 +420,12 @@ export function ChatPanel({ projectPath, opencodeAvailable, onAssistantDone }: P
   const dragDepth = useRef(0)
   // A question the assistant is blocked on (null = none pending).
   const [question, setQuestion] = useState<ChatQuestionRequest | null>(null)
+  // Live connectivity, driven by the browser's online/offline events. When
+  // false the composer is locked and a "Disconnected" banner explains why.
+  const [online, setOnline] = useState(navigator.onLine)
+  // True after a turn died to a lost connection — surfaces the "Back online /
+  // Continue" banner once connectivity returns. Cleared by the next send.
+  const [interrupted, setInterrupted] = useState(false)
   // ↑/↓ recall of previously sent messages: historyPos is the entry being
   // browsed (null = not browsing), draftRef holds whatever was typed before
   // browsing started so ↓ past the newest entry brings it back.
@@ -487,6 +523,17 @@ export function ChatPanel({ projectPath, opencodeAvailable, onAssistantDone }: P
     setAttachments(next)
   }
 
+  useEffect(() => {
+    const goOnline = (): void => setOnline(true)
+    const goOffline = (): void => setOnline(false)
+    window.addEventListener('online', goOnline)
+    window.addEventListener('offline', goOffline)
+    return () => {
+      window.removeEventListener('online', goOnline)
+      window.removeEventListener('offline', goOffline)
+    }
+  }, [])
+
   const slashQuery = slashQueryOf(input)
   const slashMatches = slashQuery !== null ? SLASH_COMMANDS.filter((c) => c.name.startsWith(slashQuery)) : []
   const slashOpen = !slashDismissed && slashMatches.length > 0
@@ -549,6 +596,12 @@ export function ChatPanel({ projectPath, opencodeAvailable, onAssistantDone }: P
       setStreaming(false)
       // However the turn ended, no question can still be waiting on it.
       setQuestion(null)
+      // A turn that failed because the connection dropped (either we're
+      // observably offline, or the error reads as a transport failure) is
+      // resumable — remember it so the "Continue" banner appears on reconnect.
+      const dropped =
+        !payload.ok && !payload.cancelled && !!payload.error && (!navigator.onLine || NETWORK_ERROR_RE.test(payload.error))
+      if (dropped) setInterrupted(true)
       setMessages((msgs) => {
         const finalized = msgs.map((m) => (m.streaming ? { ...m, streaming: false } : m))
         if (payload.cancelled) {
@@ -558,7 +611,10 @@ export function ChatPanel({ projectPath, opencodeAvailable, onAssistantDone }: P
           return [...finalized, { id: crypto.randomUUID(), role: 'error' as const, content: 'Stopped.' }]
         }
         if (!payload.ok && payload.error) {
-          return [...finalized, { id: crypto.randomUUID(), role: 'error' as const, content: payload.error }]
+          return [
+            ...finalized,
+            { id: crypto.randomUUID(), role: 'error' as const, content: dropped ? DISCONNECTED_NOTICE : payload.error }
+          ]
         }
         return finalized
       })
@@ -593,6 +649,10 @@ export function ChatPanel({ projectPath, opencodeAvailable, onAssistantDone }: P
   const send = async (text?: string): Promise<void> => {
     const message = (text ?? input).trim()
     if ((!message && attachments.length === 0) || streaming) return
+    // Offline sends could only fail at the provider — the "Disconnected"
+    // banner above the composer already explains why nothing goes through.
+    if (!navigator.onLine) return
+    setInterrupted(false)
     const outgoing = attachments
     if (message) {
       // Record for ↑/↓ recall — in memory and on disk (kept across /clear;
@@ -629,6 +689,7 @@ export function ChatPanel({ projectPath, opencodeAvailable, onAssistantDone }: P
       setMessages([])
       setStreaming(false)
       setQuestion(null)
+      setInterrupted(false)
       setHistoryPos(null)
       draftRef.current = ''
     }
@@ -749,6 +810,28 @@ export function ChatPanel({ projectPath, opencodeAvailable, onAssistantDone }: P
       </div>
 
       <div className="chat-inputbar">
+        {!online && (
+          <div className="chat-status offline" role="status">
+            <span className="status-dot" />
+            <span>
+              {streaming
+                ? 'Disconnected — waiting for the internet to come back…'
+                : 'Disconnected — no internet connection.'}
+            </span>
+          </div>
+        )}
+        {online && interrupted && !streaming && (
+          <div className="chat-status reconnected" role="status">
+            <span className="status-dot" />
+            <span>Back online.</span>
+            <button
+              className="btn btn-sm btn-primary continue-btn"
+              onClick={() => void send('Continue where you left off.')}
+            >
+              Continue
+            </button>
+          </div>
+        )}
         {slashOpen && (
           <div className="slash-pop">
             {slashMatches.map((command, i) => (
@@ -891,8 +974,8 @@ export function ChatPanel({ projectPath, opencodeAvailable, onAssistantDone }: P
             ) : (
               <button
                 className="send-btn"
-                title="Send"
-                disabled={!input.trim() && attachments.length === 0}
+                title={online ? 'Send' : 'No internet connection'}
+                disabled={(!input.trim() && attachments.length === 0) || !online}
                 onClick={() => void send()}
               >
                 <SendIcon size={14} />
