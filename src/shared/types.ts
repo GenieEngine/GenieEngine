@@ -73,6 +73,17 @@ export interface ChatAttachment {
   dataUrl: string
 }
 
+/**
+ * Persisted chat state for a project, loaded when it opens. `messages` is the
+ * renderer's own transcript JSON — opaque to the main process; the renderer
+ * validates the shape on restore.
+ */
+export interface SavedChatState {
+  messages: unknown[]
+  /** Everything the user ever sent, oldest first — for ↑/↓ recall. */
+  inputHistory: string[]
+}
+
 /** State of the AI provider setup (API key / provider / model). */
 export interface SetupStatus {
   /** True once the configured provider has a usable credential. */
@@ -247,7 +258,14 @@ export interface OpenGenieApi {
   // AI chat (OpenCode)
   chatSend(message: string, attachments?: ChatAttachment[]): Promise<Result<null>>
   chatCancel(): Promise<Result<null>>
+  /** /clear: fresh conversation AND deletes the project's saved transcript. */
   chatNewSession(): Promise<Result<null>>
+  /** Saved transcript + input history for a project; also resumes its AI session. */
+  chatLoadState(projectPath: string): Promise<Result<SavedChatState>>
+  /** Persist the transcript (called debounced whenever the chat settles). */
+  chatSaveHistory(projectPath: string, messages: unknown[]): Promise<Result<null>>
+  /** Record a sent message for ↑/↓ recall (kept even across /clear). */
+  chatAppendInput(projectPath: string, entry: string): Promise<Result<null>>
   getSetupStatus(): Promise<Result<SetupStatus>>
   /** Optional credential fields left blank = leave that provider's setup unchanged. */
   saveSetup(

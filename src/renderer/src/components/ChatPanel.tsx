@@ -36,6 +36,46 @@ interface ChatMessage {
 // Attachments cap: data URLs ride the message to the model; keep them sane.
 const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024
 
+// What the assistant can digest. The file-picker enforces this via `accept`;
+// drag & drop bypasses that, so addFiles re-checks against the same list.
+const ATTACH_EXTENSIONS = ['.txt', '.md', '.json', '.gd', '.tscn', '.cfg', '.csv', '.log', '.pdf']
+const ATTACH_ACCEPT = ['image/*', ...ATTACH_EXTENSIONS].join(',')
+
+function isAttachable(file: File): boolean {
+  return file.type.startsWith('image/') || ATTACH_EXTENSIONS.some((ext) => file.name.toLowerCase().endsWith(ext))
+}
+
+/**
+ * Restored transcripts come back as opaque JSON (possibly from an older app
+ * version) — keep only messages that still match our shape, and settle any
+ * state that only makes sense live: nothing restored can be streaming, and a
+ * tool chip frozen as "running" would show a spinner forever.
+ */
+function sanitizeRestored(raw: unknown[]): ChatMessage[] {
+  const messages: ChatMessage[] = []
+  for (const item of raw) {
+    const m = item as Partial<ChatMessage>
+    if (typeof m.id !== 'string' || (m.role !== 'user' && m.role !== 'assistant' && m.role !== 'error')) continue
+    const parts = Array.isArray(m.parts)
+      ? m.parts
+          .filter((p) => p && typeof p.id === 'string')
+          .map((p) =>
+            p.kind === 'tool' && p.tool && (p.tool.status === 'running' || p.tool.status === 'pending')
+              ? { ...p, tool: { ...p.tool, status: 'completed' as ChatToolStatus } }
+              : p
+          )
+      : undefined
+    messages.push({
+      id: m.id,
+      role: m.role,
+      content: typeof m.content === 'string' ? m.content : '',
+      parts,
+      attachments: Array.isArray(m.attachments) ? m.attachments : undefined
+    })
+  }
+  return messages
+}
+
 function readFileAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
@@ -46,6 +86,7 @@ function readFileAsDataUrl(file: File): Promise<string> {
 }
 
 interface Props {
+  projectPath: string
   opencodeAvailable: boolean
   onAssistantDone: () => void
 }
@@ -190,7 +231,7 @@ function AssistantMessage({
   )
 }
 
-export function ChatPanel({ opencodeAvailable, onAssistantDone }: Props): React.JSX.Element {
+export function ChatPanel({ projectPath, opencodeAvailable, onAssistantDone }: Props): React.JSX.Element {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)
@@ -198,11 +239,66 @@ export function ChatPanel({ opencodeAvailable, onAssistantDone }: Props): React.
   const [slashDismissed, setSlashDismissed] = useState(false)
   const [attachments, setAttachments] = useState<ChatAttachment[]>([])
   const [attachError, setAttachError] = useState<string | null>(null)
+  // OS file drag hovering the panel. Enter/leave fire for every child crossed,
+  // so a depth counter decides when the drag has truly left the panel.
+  const [dragActive, setDragActive] = useState(false)
+  const dragDepth = useRef(0)
+  // ↑/↓ recall of previously sent messages: historyPos is the entry being
+  // browsed (null = not browsing), draftRef holds whatever was typed before
+  // browsing started so ↓ past the newest entry brings it back.
+  const [inputHistory, setInputHistory] = useState<string[]>([])
+  const [historyPos, setHistoryPos] = useState<number | null>(null)
+  const draftRef = useRef('')
+  // Saving is disabled until this project's saved state has loaded, and a
+  // just-restored/just-saved array isn't rewritten to disk unchanged.
+  const [canSave, setCanSave] = useState(false)
+  const lastSavedRef = useRef<ChatMessage[] | null>(null)
   const listRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const onDoneRef = useRef(onAssistantDone)
   onDoneRef.current = onAssistantDone
+
+  // Restore this project's transcript and recall history when it opens (the
+  // main process also resumes the saved AI session so context carries over).
+  useEffect(() => {
+    let alive = true
+    void window.api.chatLoadState(projectPath).then((result) => {
+      if (!alive) return
+      if (result.ok) {
+        if (result.data.messages.length > 0) {
+          const restored = sanitizeRestored(result.data.messages)
+          lastSavedRef.current = restored
+          setMessages(restored)
+        }
+        setInputHistory(result.data.inputHistory)
+      }
+      setCanSave(true)
+    })
+    return () => {
+      alive = false
+    }
+  }, [projectPath])
+
+  // Persist the transcript whenever the conversation settles. Skipped while
+  // streaming — parts update many times a second and transcripts can embed
+  // screenshots — so only the settled state is written (debounced on top).
+  // The timer lives in a ref so /clear can cancel a pending save immediately;
+  // waiting for the effect cleanup would let it fire mid-clear and resurrect
+  // the just-deleted file.
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const cancelPendingSave = (): void => {
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+    saveTimerRef.current = null
+  }
+  useEffect(() => {
+    if (!canSave || streaming || messages.length === 0 || messages === lastSavedRef.current) return
+    saveTimerRef.current = setTimeout(() => {
+      lastSavedRef.current = messages
+      void window.api.chatSaveHistory(projectPath, messages)
+    }, 400)
+    return cancelPendingSave
+  }, [messages, streaming, canSave, projectPath])
 
   // "Request changes" on a generated asset: pre-fill the composer so the user
   // just describes what's wrong; the assistant regenerates (AGENTS.md tells it
@@ -212,11 +308,23 @@ export function ChatPanel({ opencodeAvailable, onAssistantDone }: Props): React.
     textareaRef.current?.focus()
   }
 
+  /** After recalling a history entry, park the caret at its end (shell-style). */
+  const moveCaretToEnd = (): void => {
+    requestAnimationFrame(() => {
+      const ta = textareaRef.current
+      ta?.setSelectionRange(ta.value.length, ta.value.length)
+    })
+  }
+
   const addFiles = async (files: FileList | null): Promise<void> => {
     if (!files || files.length === 0) return
     setAttachError(null)
     const next = [...attachments]
     for (const file of Array.from(files)) {
+      if (!isAttachable(file)) {
+        setAttachError(`"${file.name}" isn't a supported attachment type.`)
+        continue
+      }
       const total = next.reduce((n, a) => n + a.dataUrl.length, 0)
       if (file.size > MAX_ATTACHMENT_BYTES || total + file.size * 1.4 > MAX_ATTACHMENT_BYTES) {
         setAttachError('Attachments are limited to 8 MB per message.')
@@ -290,6 +398,9 @@ export function ChatPanel({ opencodeAvailable, onAssistantDone }: Props): React.
       setMessages((msgs) => {
         const finalized = msgs.map((m) => (m.streaming ? { ...m, streaming: false } : m))
         if (payload.cancelled) {
+          // A cancel that raced /clear reports into an already-empty chat —
+          // keep it empty instead of persisting a lone "Stopped." notice.
+          if (finalized.length === 0) return finalized
           return [...finalized, { id: crypto.randomUUID(), role: 'error' as const, content: 'Stopped.' }]
         }
         if (!payload.ok && payload.error) {
@@ -317,6 +428,14 @@ export function ChatPanel({ opencodeAvailable, onAssistantDone }: Props): React.
     const message = (text ?? input).trim()
     if ((!message && attachments.length === 0) || streaming) return
     const outgoing = attachments
+    if (message) {
+      // Record for ↑/↓ recall — in memory and on disk (kept across /clear;
+      // the 100-entry cap mirrors what chat-history.ts keeps on disk).
+      setInputHistory((h) => (h[h.length - 1] === message ? h : [...h, message].slice(-100)))
+      void window.api.chatAppendInput(projectPath, message)
+    }
+    setHistoryPos(null)
+    draftRef.current = ''
     setInput('')
     setAttachments([])
     setAttachError(null)
@@ -336,15 +455,56 @@ export function ChatPanel({ opencodeAvailable, onAssistantDone }: Props): React.
     setInput('')
     setSlashIndex(0)
     if (command.name === 'clear') {
+      cancelPendingSave()
       if (streaming) await window.api.chatCancel()
+      // Also deletes the saved transcript (input history survives — ↑ still
+      // recalls messages sent before the clear).
       await window.api.chatNewSession()
       setMessages([])
       setStreaming(false)
+      setHistoryPos(null)
+      draftRef.current = ''
     }
   }
 
+  // Files can be dropped anywhere on the chat panel, not just the input box.
+  // dragOver must preventDefault or the browser never fires the drop (and
+  // Electron would try to navigate to the dropped file instead).
+  const hasFiles = (e: React.DragEvent): boolean => e.dataTransfer.types.includes('Files')
+
   return (
-    <div className="chat-panel">
+    <div
+      className="chat-panel"
+      onDragEnter={(e) => {
+        if (!hasFiles(e)) return
+        e.preventDefault()
+        dragDepth.current++
+        setDragActive(true)
+      }}
+      onDragOver={(e) => {
+        if (!hasFiles(e)) return
+        e.preventDefault()
+        e.dataTransfer.dropEffect = 'copy'
+      }}
+      onDragLeave={(e) => {
+        if (!hasFiles(e)) return
+        dragDepth.current = Math.max(0, dragDepth.current - 1)
+        if (dragDepth.current === 0) setDragActive(false)
+      }}
+      onDrop={(e) => {
+        if (!hasFiles(e)) return
+        e.preventDefault()
+        dragDepth.current = 0
+        setDragActive(false)
+        void addFiles(e.dataTransfer.files)
+      }}
+    >
+      {dragActive && (
+        <div className="drop-overlay">
+          <PlusIcon size={22} />
+          <span>Drop files to attach</span>
+        </div>
+      )}
       <div className="chat-body">
       <div className="chat-messages" ref={listRef}>
         {messages.length === 0 && (
@@ -364,7 +524,8 @@ export function ChatPanel({ opencodeAvailable, onAssistantDone }: Props): React.
               ))}
             </div>
             <p className="chat-hint">
-              Tip: type <code>/</code> for commands — <code>/clear</code> resets the chat.
+              Tip: type <code>/</code> for commands — <code>/clear</code> resets the chat. Press <code>↑</code> to
+              recall messages you sent before.
             </p>
           </div>
         )}
@@ -460,6 +621,8 @@ export function ChatPanel({ opencodeAvailable, onAssistantDone }: Props): React.
               setInput(e.target.value)
               setSlashDismissed(false)
               setSlashIndex(0)
+              // Typing ends history browsing — the edit becomes the draft.
+              setHistoryPos(null)
             }}
           onKeyDown={(e) => {
             if (slashOpen) {
@@ -489,6 +652,37 @@ export function ChatPanel({ opencodeAvailable, onAssistantDone }: Props): React.
                 return
               }
             }
+            // ↑/↓ recall previously sent messages (shell-style). ↑ starts
+            // browsing when the composer is empty or the caret is at the very
+            // start; while the text still equals the recalled entry the
+            // arrows keep cycling, and any edit ends browsing, returning the
+            // arrows to normal caret movement.
+            const browsing = historyPos !== null && input === inputHistory[historyPos]
+            if (e.key === 'ArrowUp' && inputHistory.length > 0) {
+              const caretAtStart = e.currentTarget.selectionStart === 0 && e.currentTarget.selectionEnd === 0
+              if (browsing || input === '' || caretAtStart) {
+                e.preventDefault()
+                if (!browsing) draftRef.current = input
+                const next = browsing && historyPos !== null ? Math.max(0, historyPos - 1) : inputHistory.length - 1
+                setHistoryPos(next)
+                setInput(inputHistory[next])
+                moveCaretToEnd()
+                return
+              }
+            }
+            if (e.key === 'ArrowDown' && browsing && historyPos !== null) {
+              e.preventDefault()
+              if (historyPos >= inputHistory.length - 1) {
+                // Past the newest entry: back to whatever was being typed.
+                setHistoryPos(null)
+                setInput(draftRef.current)
+              } else {
+                setHistoryPos(historyPos + 1)
+                setInput(inputHistory[historyPos + 1])
+              }
+              moveCaretToEnd()
+              return
+            }
             if (e.key === 'Enter' && !e.shiftKey) {
               e.preventDefault()
               void send()
@@ -500,7 +694,7 @@ export function ChatPanel({ opencodeAvailable, onAssistantDone }: Props): React.
               ref={fileInputRef}
               type="file"
               multiple
-              accept="image/*,.txt,.md,.json,.gd,.tscn,.cfg,.csv,.log,.pdf"
+              accept={ATTACH_ACCEPT}
               style={{ display: 'none' }}
               onChange={(e) => {
                 void addFiles(e.target.files)
@@ -509,7 +703,7 @@ export function ChatPanel({ opencodeAvailable, onAssistantDone }: Props): React.
             />
             <button
               className="attach-btn"
-              title="Attach files or images (stay in the chat, not added to your game)"
+              title="Attach files or images — or drag & drop them into the chat (stay in the chat, not added to your game)"
               onClick={() => fileInputRef.current?.click()}
             >
               <PlusIcon size={14} />

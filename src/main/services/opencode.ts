@@ -3,6 +3,7 @@ import { request as httpRequest, get as httpGet } from 'node:http'
 import { createServer } from 'node:net'
 import { sendToRenderer } from '../window'
 import { resolveOpencode } from './binaries'
+import { getHarnessEndpoint } from './test-harness'
 import type { ChatAttachment, ChatPartUpdate, ChatToolStatus } from '../../shared/types'
 
 /**
@@ -28,6 +29,8 @@ interface OpencodeServer {
 
 let server: OpencodeServer | null = null
 let sessionID: string | null = null
+/** True while sessionID came from a saved chat file and hasn't been checked against the server. */
+let sessionRestored = false
 let busy = false
 let cancelled = false
 let filesChangedTimer: ReturnType<typeof setTimeout> | null = null
@@ -165,11 +168,24 @@ function pumpEvents(srv: OpencodeServer): void {
   }
 }
 
+/** Kill the serve process (if any) without touching conversation state. */
+function killServer(): void {
+  if (server) {
+    server.sseAbort.abort()
+    server.proc.kill()
+    server = null
+  }
+}
+
 async function ensureServer(projectPath: string): Promise<OpencodeServer> {
   if (server && server.projectPath === projectPath && server.proc.exitCode === null) {
     return server
   }
-  shutdownChat()
+  // Replace a dead or wrong-project server process — but never reset the
+  // conversation here: sessions live in OpenCode's storage, not the process,
+  // and a session restored from saved chat history must survive its own
+  // first send (which is what spawns the server).
+  killServer()
 
   const opencode = await resolveOpencode()
   if (!opencode) {
@@ -179,13 +195,25 @@ async function ensureServer(projectPath: string): Promise<OpencodeServer> {
   }
 
   const port = await getFreePort()
+  // The MCP bridge inherits this env through OpenCode, so the game-test tools
+  // reach THIS app instance even when several OpenGenie instances are running
+  // (harness.json alone is shared and only names whichever registered last).
+  const harness = getHarnessEndpoint()
   const proc = spawn(opencode, ['serve', '--port', String(port), '--hostname', '127.0.0.1'], {
     cwd: projectPath,
     // PWD must match cwd — OpenCode trusts the logical PWD for its project
     // directory (see the run-mode bug this fixed in git history).
     // OPENCODE_ENABLE_EXA registers the websearch tool (hosted Exa/Parallel
     // search, no API key needed) — without it, OpenCode only offers webfetch.
-    env: { ...process.env, PWD: projectPath, NO_COLOR: '1', OPENCODE_ENABLE_EXA: '1' },
+    env: {
+      ...process.env,
+      PWD: projectPath,
+      NO_COLOR: '1',
+      OPENCODE_ENABLE_EXA: '1',
+      ...(harness
+        ? { OPENGENIE_HARNESS_PORT: String(harness.port), OPENGENIE_HARNESS_TOKEN: harness.token }
+        : {})
+    },
     stdio: ['ignore', 'pipe', 'pipe']
   })
 
@@ -288,6 +316,13 @@ export async function sendChatMessage(
 
   const srv = await ensureServer(projectPath)
   await assertProviderAvailable(srv)
+  // A session restored from a saved chat continues that conversation (OpenCode
+  // persists sessions per directory) — but only if the server still knows it;
+  // otherwise fall back to a fresh session rather than failing the send.
+  if (sessionID && sessionRestored) {
+    await api(srv, 'GET', `/session/${sessionID}`).catch(() => (sessionID = null))
+    sessionRestored = false
+  }
   if (!sessionID) {
     const session = await api<{ id: string }>(srv, 'POST', '/session', {})
     sessionID = session.id
@@ -349,16 +384,30 @@ export function cancelChat(): void {
 export function newChatSession(): void {
   cancelChat()
   sessionID = null
+  sessionRestored = false
+}
+
+/**
+ * Continue a session saved in the project's chat history (called when a
+ * project with a restored transcript is opened). Verified lazily on the next
+ * send — see sendChatMessage.
+ */
+export function resumeSession(id: string | null): void {
+  if (busy) return
+  sessionID = id
+  sessionRestored = id !== null
+}
+
+/** The active conversation id, saved with the transcript for later resume. */
+export function getSessionID(): string | null {
+  return sessionID
 }
 
 /** Tear down the chat server — project switch or app quit. */
 export function shutdownChat(): void {
   sessionID = null
+  sessionRestored = false
   busy = false
   messageRoles.clear()
-  if (server) {
-    server.sseAbort.abort()
-    server.proc.kill()
-    server = null
-  }
+  killServer()
 }

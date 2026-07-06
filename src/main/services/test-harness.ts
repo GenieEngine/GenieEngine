@@ -1,6 +1,6 @@
 import { app } from 'electron'
 import { randomBytes } from 'node:crypto'
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { join } from 'node:path'
@@ -22,12 +22,25 @@ import type { AssetPreview } from '../../shared/types'
 /**
  * Local HTTP API that exposes the AI game-testing tools to the MCP bridge
  * (resources/mcp-bridge.mjs), which OpenCode spawns as a local MCP server.
- * The bridge finds us through harness.json in userData (port + token), so
- * nothing machine-specific is written into any project or global config.
+ * The bridge finds us two ways (see getHarnessEndpoint / harness.json below),
+ * so nothing machine-specific is written into any project or global config.
  * Bound to 127.0.0.1 and guarded by a per-launch random token.
  */
 
 let server: Server | null = null
+let endpoint: { port: number; token: string } | null = null
+
+/**
+ * This instance's harness address. Injected into the env of every OpenCode
+ * server we spawn so the bridge always reaches THIS app instance. harness.json
+ * can't provide that guarantee: it's one file shared by every OpenGenie
+ * instance (dev + packaged can run side by side), so it holds whichever
+ * instance registered last — the file is only a fallback for OpenCode
+ * sessions that weren't launched by the app (e.g. the opencode CLI).
+ */
+export function getHarnessEndpoint(): { port: number; token: string } | null {
+  return endpoint
+}
 
 function harnessFilePath(): string {
   return join(app.getPath('userData'), 'harness.json')
@@ -206,7 +219,8 @@ export function startTestHarness(): void {
   server.listen(0, '127.0.0.1', () => {
     const address = server?.address()
     const port = typeof address === 'object' && address ? address.port : 0
-    // The MCP bridge discovers us through this file.
+    endpoint = { port, token }
+    // Fallback discovery for OpenCode sessions not spawned by the app.
     writeFileSync(harnessFilePath(), JSON.stringify({ port, token, pid: process.pid }))
   })
 }
@@ -214,5 +228,15 @@ export function startTestHarness(): void {
 export function stopTestHarness(): void {
   server?.close()
   server = null
-  rmSync(harnessFilePath(), { force: true })
+  // Only remove harness.json if it still holds OUR registration. Another
+  // OpenGenie instance may have overwritten it since we launched (the file is
+  // shared), and deleting theirs would strand that still-running instance —
+  // this exact race broke the packaged app while a dev instance quit.
+  try {
+    const current = JSON.parse(readFileSync(harnessFilePath(), 'utf8')) as { token?: string }
+    if (current.token === endpoint?.token) rmSync(harnessFilePath(), { force: true })
+  } catch {
+    // Missing or unreadable — nothing of ours to clean up.
+  }
+  endpoint = null
 }

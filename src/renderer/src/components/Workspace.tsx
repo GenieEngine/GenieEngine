@@ -59,7 +59,7 @@ export function Workspace({ project, width, opencodeAvailable, advancedMode }: P
       )}
       <div className="workspace-body">
         <div className="panel" style={{ display: !advancedMode || tab === 'chat' ? 'flex' : 'none' }}>
-          <ChatPanel opencodeAvailable={opencodeAvailable} onAssistantDone={bump} />
+          <ChatPanel projectPath={project.path} opencodeAvailable={opencodeAvailable} onAssistantDone={bump} />
         </div>
         <div className="panel" style={{ display: advancedMode && tab === 'files' ? 'flex' : 'none' }}>
           <FilesPanel project={project} refreshToken={workVersion} />
