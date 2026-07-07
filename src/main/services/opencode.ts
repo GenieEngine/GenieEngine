@@ -347,23 +347,31 @@ export async function sendChatMessage(
   attachments: ChatAttachment[] = []
 ): Promise<void> {
   if (busy) throw new Error('A response is already in progress')
-
-  const srv = await ensureServer(projectPath)
-  await assertProviderAvailable(srv)
-  // A session restored from a saved chat continues that conversation (OpenCode
-  // persists sessions per directory) — but only if the server still knows it;
-  // otherwise fall back to a fresh session rather than failing the send.
-  if (sessionID && sessionRestored) {
-    await api(srv, 'GET', `/session/${sessionID}`).catch(() => (sessionID = null))
-    sessionRestored = false
-  }
-  if (!sessionID) {
-    const session = await api<{ id: string }>(srv, 'POST', '/session', {})
-    sessionID = session.id
-  }
-
+  // Claim the turn before the first await — two rapid sends could otherwise
+  // both pass the guard above while the first was still starting its server.
   busy = true
   cancelled = false
+
+  let srv: OpencodeServer
+  try {
+    srv = await ensureServer(projectPath)
+    await assertProviderAvailable(srv)
+    // A session restored from a saved chat continues that conversation (OpenCode
+    // persists sessions per directory) — but only if the server still knows it;
+    // otherwise fall back to a fresh session rather than failing the send.
+    if (sessionID && sessionRestored) {
+      await api(srv, 'GET', `/session/${sessionID}`).catch(() => (sessionID = null))
+      sessionRestored = false
+    }
+    if (!sessionID) {
+      const session = await api<{ id: string }>(srv, 'POST', '/session', {})
+      sessionID = session.id
+    }
+  } catch (err) {
+    busy = false
+    throw err
+  }
+
   // Parts of finished turns are final — only the live turn needs delta state.
   partCache.clear()
   const currentSession = sessionID

@@ -24,8 +24,9 @@ function createWindow(): void {
     // Frameless-style titlebar on macOS for a modern, engine-like look.
     ...(process.platform === 'darwin' ? { titleBarStyle: 'hiddenInset' as const } : {}),
     webPreferences: {
-      preload: join(__dirname, '../preload/index.js'),
-      sandbox: false
+      // Renderer stays sandboxed (the Electron default): the preload only
+      // uses contextBridge/ipcRenderer, which sandboxed preloads support.
+      preload: join(__dirname, '../preload/index.js')
     }
   })
 
@@ -39,8 +40,10 @@ function createWindow(): void {
   win.on('leave-full-screen', () => sendToRenderer('window:fullscreenChange', false))
 
   // Any external link (e.g. opencode.ai in error hints) opens in the browser.
+  // Web URLs only, matching the will-navigate handler below: openExternal on
+  // other schemes (file:, app-registered protocols) can launch local apps.
   win.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url)
+    if (/^https?:/i.test(url)) shell.openExternal(url)
     return { action: 'deny' }
   })
 

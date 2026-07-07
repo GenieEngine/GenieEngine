@@ -1,6 +1,6 @@
 import { app } from 'electron'
-import { randomBytes } from 'node:crypto'
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { randomBytes, timingSafeEqual } from 'node:crypto'
+import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { join } from 'node:path'
@@ -176,11 +176,24 @@ function readBody(req: IncomingMessage): Promise<string> {
     let body = ''
     req.on('data', (chunk) => {
       body += chunk
-      if (body.length > 1_000_000) reject(new Error('request too large'))
+      if (body.length > 1_000_000) {
+        // Tear the request down too — rejecting alone would leave the socket
+        // streaming data into `body` with nobody ever reading the result.
+        req.destroy()
+        reject(new Error('request too large'))
+      }
     })
     req.on('end', () => resolve(body))
     req.on('error', reject)
   })
+}
+
+/** Constant-time token check — `!==` would leak prefix-match timing to other local users. */
+function tokenMatches(header: string | string[] | undefined, token: string): boolean {
+  if (typeof header !== 'string') return false
+  const a = Buffer.from(header)
+  const b = Buffer.from(token)
+  return a.length === b.length && timingSafeEqual(a, b)
 }
 
 export function startTestHarness(): void {
@@ -191,7 +204,7 @@ export function startTestHarness(): void {
       res.writeHead(status, { 'content-type': 'application/json' })
       res.end(JSON.stringify(payload))
     }
-    if (req.headers['x-opengenie-token'] !== token) {
+    if (!tokenMatches(req.headers['x-opengenie-token'], token)) {
       respond(403, { ok: false, text: 'invalid token' })
       return
     }
@@ -221,7 +234,12 @@ export function startTestHarness(): void {
     const port = typeof address === 'object' && address ? address.port : 0
     endpoint = { port, token }
     // Fallback discovery for OpenCode sessions not spawned by the app.
-    writeFileSync(harnessFilePath(), JSON.stringify({ port, token, pid: process.pid }))
+    // Owner-only like the credential files: the token authorizes tool calls
+    // (GDScript eval, input injection) on a loopback server every local user
+    // can reach. `mode` only applies on creation, so chmod also fixes up a
+    // file left behind by an older build with default permissions.
+    writeFileSync(harnessFilePath(), JSON.stringify({ port, token, pid: process.pid }), { mode: 0o600 })
+    chmodSync(harnessFilePath(), 0o600)
   })
 }
 

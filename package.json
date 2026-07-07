@@ -5,7 +5,7 @@
   "description": "AI-powered game engine — build games by chatting with an AI, powered by Godot under the hood.",
   "main": "out/main/index.js",
   "author": "Jared Zhao",
-  "license": "MIT",
+  "license": "GPL-3.0-or-later",
   "scripts": {
     "postinstall": "node scripts/fetch-vendor.mjs && node scripts/build-native.mjs",
     "setup": "node scripts/fetch-vendor.mjs && node scripts/build-native.mjs",
@@ -62,27 +62,33 @@
       "native/layerhost/build/Release/*.node",
       "resources/**"
     ],
-    "extraResources": [
-      {
-        "from": "vendor",
-        "to": "vendor"
-      }
-    ],
     "mac": {
       "identity": null,
       "target": [
         "dmg",
         "zip"
+      ],
+      "extraResources": [
+        { "from": "vendor/godot/darwin", "to": "vendor/godot/darwin" },
+        { "from": "vendor/opencode/darwin", "to": "vendor/opencode/darwin" }
       ]
     },
     "win": {
       "target": [
         "nsis"
+      ],
+      "extraResources": [
+        { "from": "vendor/godot/win32", "to": "vendor/godot/win32" },
+        { "from": "vendor/opencode/win32", "to": "vendor/opencode/win32" }
       ]
     },
     "linux": {
       "target": [
         "AppImage"
+      ],
+      "extraResources": [
+        { "from": "vendor/godot/linux", "to": "vendor/godot/linux" },
+        { "from": "vendor/opencode/linux", "to": "vendor/opencode/linux" }
       ]
     }
   }

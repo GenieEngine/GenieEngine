@@ -115,7 +115,12 @@ export async function extractZip(archive: string, dest: string): Promise<void> {
       await pexec('ditto', ['-xk', archive, dest])
       return
     case 'win32':
-      await pexec('powershell', ['-NoProfile', '-Command', `Expand-Archive -Force -Path "${archive}" -DestinationPath "${dest}"`])
+      // bsdtar (ships with Windows 10 1803+, the oldest Windows Electron
+      // supports) extracts zips, and execFile passes the paths as plain args.
+      // The previous Expand-Archive command string interpolated `dest`, which
+      // hy3d.ts derives from a model-supplied folder name — a `"` or `$()` in
+      // it could execute arbitrary PowerShell.
+      await pexec('tar', ['-xf', archive, '-C', dest])
       return
     default:
       await pexec('unzip', ['-q', '-o', archive, '-d', dest])
