@@ -6,3 +6,5 @@ native/layerhost/build/
 .claude/
 .DS_Store
 *.log
+
+CLAUDE.md
