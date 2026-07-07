@@ -1,87 +1,119 @@
 # OpenGenie
 
-OpenGenie is an AI-powered game engine that enables anyone to build their own video games by
-describing them in plain language. Games are real [Godot 4](https://godotengine.org) projects
-under the hood, and the AI assistant is powered by the [OpenCode](https://opencode.ai) CLI.
+[![Discord](https://img.shields.io/badge/Discord-Join%20the%20community-5865F2?logo=discord&logoColor=white)](https://discord.gg/BC8fF2nr4y)
+[![License: GPLv3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 
-## Layout
+OpenGenie is an AI-powered game engine that lets anyone build a real video game by describing it
+in plain language. Games are real [Godot 4](https://godotengine.org) projects under the hood, and
+the AI assistant is powered by the [OpenCode](https://opencode.ai) CLI. Everything — the engine,
+git, and the AI agent — ships inside the app, so there's nothing to install or configure beyond
+an API key.
 
-- **Game view (center)** — press Run and the full desktop engine runs embedded in the OpenGenie
-  window via Godot 4.7's embedded display server (the same mechanism the Godot editor uses for its
-  in-editor game view on macOS): the game process draws into a cross-process CoreAnimation context
-  that OpenGenie composites with a small native addon (`native/layerhost`), while input and display
-  state travel over Godot's debugger protocol (`src/main/services/godot-wire.ts`, `godot-embed.ts`,
-  `godot-input-codec.ts`). Works in macOS fullscreen. macOS-only for now. Console output (including
-  the game's own prints) streams into the Output panel.
-- **Workspace sidebar (right)** with three tabs:
-  - **Chat** — talk to the AI assistant (OpenCode, via its headless server API). Responses stream
-    live, including the tools the agent runs (file edits, shell commands) shown as activity chips.
-    The assistant can also **test games itself**: an MCP server (`resources/mcp-bridge.mjs`,
-    auto-registered in the global OpenCode config, backed by a local HTTP harness in the app)
-    gives it tools to run the game off-screen (full engine, no window), send scripted input,
-    capture screenshots, query scene-tree state with GDScript expressions, and read logs —
-    so it can verify its changes actually work before reporting back.
-  - **Files** — browse the project, plus buttons to open the codebase in **VS Code** or the
-    **Godot editor**.
-  - **Git** — VS Code-style source control: stage, commit, add a remote, push and pull.
+![OpenGenie running a game built with it, chat on the right, embedded game view on the left](docs/screenshot.png)
+*OpenGenie automatically tests your game, so you spend less time debugging, and more time in the
+creative process of creating your game.*
 
-New games are scaffolded as runnable Godot projects (with an `AGENTS.md` so the AI has context)
-and initialized as git repositories. The welcome screen lets you choose where the game's source
-code is stored, and the Git tab lets you publish it to any remote (e.g. GitHub).
+## Free and Open Source
 
-## Batteries included
+OpenGenie is completely free and open source under the permissive GPLv3 license. No strings
+attached, no royalties. Games you create are yours. We follow the very permissive Open Source model
+of Godot, which is a key technology that enables OpenGenie.
 
-OpenGenie is fully self-contained — installed builds ship with everything the user needs:
+## Why OpenGenie (vs. a coding agent like Claude Code)
 
-- **Godot 4.7** — downloaded into `vendor/` by `scripts/fetch-vendor.mjs` (runs automatically on
-  `npm install`) and packaged into the app's resources by electron-builder.
-- **git** — embedded via [dugite](https://github.com/desktop/dugite) (the same embedded git that
-  GitHub Desktop ships). A system git is preferred when present because it carries the user's
-  credential helpers; otherwise the bundled git is used, with a default commit identity fallback.
-- **OpenCode CLI** — bundled the same way as Godot (users still sign in to their AI provider on
-  first use).
+Claude Code and OpenCode are excellent general-purpose coding agents — but they assume you already
+have a dev environment, are comfortable in a terminal, can easily create art assets, and can wire
+up a game engine and an export process yourself. OpenGenie uses that same class of AI agent, but
+packages it for one job: making a game.
 
-**VS Code is the only external app** — and only if the user wants the "Open in VS Code" button.
+- **Zero setup** — Godot, git, and the AI agent all ship inside the app. No terminal, no installing
+  an engine, no build pipeline to configure. Batteries fully included.
 
-## Development
+- **The AI tests its own work** — through a built-in MCP harness, the assistant can run the game
+  off-screen, send scripted input, take screenshots, and query game state — so it catches broken
+  changes before telling you it's done, instead of you finding out later. You spend less time
+  debugging, and more time in the creative process.
 
-Requires Node.js 18+.
+- **Art, not just code** — 2D and 3D asset generation is built into the same chat, so sprites,
+  icons, and models land straight in your project alongside the code that uses them. Note: I plan
+  to add audio (music and sound effects) generation in the future as well.
 
-```sh
-npm install        # installs deps + downloads bundled engines (~500 MB)
-npm run dev        # launch OpenGenie with hot reload
-npm run typecheck  # typecheck main + preload + renderer
-npm run build      # production build to out/
-npm run dist       # package a distributable (dmg/zip on macOS) into dist/
-npm run setup      # re-download bundled engines if vendor/ is missing
-```
+- **One-click export** — ship to all six Godot platforms without touching an export pipeline
+  yourself (MacOS, Linux, Windows, iOS, Android, Web).
 
-Note: `fetch-vendor` downloads engines for the current platform only, so distributables are built
-per-OS (standard Electron practice).
+Claude Code is the right tool if you're a developer who wants an agent inside your existing
+workflow. OpenGenie is for anyone who wants to make a game, with the same caliber of AI doing the
+work end-to-end.
 
-## Architecture
+## Download
 
-```
-src/
-  shared/types.ts        # IPC contract shared by all processes
-  main/                  # Electron main process
-    index.ts             # window creation, lifecycle
-    ipc.ts               # all IPC handlers (Result-envelope wrapped)
-    state.ts             # settings persistence, current project
-    services/
-      binaries.ts        # PATH fixing + godot/opencode/code discovery
-      projects.ts        # create/open projects (Godot scaffolding)
-      templates.ts       # new-project file templates
-      game.ts            # embedded native runs + AI test runs (layerhost)
-      godot-wire.ts      # Godot debugger protocol (variant codec, framing)
-      godot-embed.ts     # embedded-game session over the debugger channel
-      godot-input-codec.ts # DOM input -> Godot InputEvent bytes
-      test-harness.ts    # HTTP API behind the MCP game-testing tools
-      opencode.ts        # AI chat via headless opencode server (SSE)
-      git.ts             # git status/stage/commit/push/pull (porcelain v2)
-      files.ts           # file tree listing, open in VS Code
-  preload/               # contextBridge API (window.api)
-  renderer/              # React UI (dark mode)
-    src/components/      # TitleBar, Welcome, GameView, Workspace,
-                         # ChatPanel, FilesPanel, GitPanel
-```
+| Platform | Download |
+| --- | --- |
+| macOS (Apple Silicon & Intel) | [OpenGenie.dmg](https://github.com/godotengine/godot/releases/download/4.7-stable/OpenGenie-0.1.0-arm64.dmg) |
+| Windows | [OpenGenie-Setup.exe](https://github.com/godotengine/godot/releases/download/4.7-stable/OpenGenie.Setup.0.1.0.exe) |  Note: I don't have a Windows machine, so this is untested
+| Linux | [OpenGenie.AppImage](https://github.com/godotengine/godot/releases/download/4.7-stable/OpenGenie-0.1.0.AppImage) |  Note: I don't have a Linux machine, so this is untested
+
+## Getting started
+
+### 1. Install and create a project
+
+Install OpenGenie and open it. From the welcome screen, click **New Game** to scaffold a fresh
+project (and choose where its source lives), or **Open** to load an existing one.
+
+### 2. Connect your AI assistant
+
+On first launch, OpenGenie shows a **Connect your AI assistant** screen (reopen it any time via
+the gear icon in the title bar). It has three tabs:
+
+**Coding Agent** — required; this is the agent that writes your game's code and logic.
+
+- Defaults to **OpenRouter** (`https://openrouter.ai/api/v1`) with the `moonshotai/kimi-k2.7-code`
+  model. Grab a key from [openrouter.ai/keys](https://openrouter.ai/keys), paste it into
+  **API key**, and you're ready to go. Note: I've tested kimi-k2.7-code and claude-sonnet-5, and
+  both work quite well.
+
+- To use a different provider instead — OpenAI directly, or any other OpenAI-compatible endpoint —
+  just change **API endpoint** and **Model** and supply that provider's key.
+
+**2D Asset Generation** *(optional)* — lets the assistant generate sprites, icons, and textures
+straight into your project.
+
+- Add an OpenAI API key from [platform.openai.com/api-keys](https://platform.openai.com/api-keys).
+
+**3D Asset Generation** *(optional)* — lets the assistant generate 3D models straight into your
+project via Tencent's Hunyuan 3D.
+
+- Add your **Tencent SecretId** and **SecretKey**. These come from the Tencent Cloud console, under
+  Access Management (CAM) → API Keys — see [Tencent's Hunyuan-to-3D docs](https://www.tencentcloud.com/document/product/1284/75287)
+  for the API this powers.
+
+Skipping a tab just disables that capability; the assistant will explain what it can't do rather
+than failing silently.
+
+### 3. Build your game
+
+Describe what you want in the chat — the assistant writes the code, and you can hit **Run** any
+time to play the current build right in the window. Ask it for art (2D or 3D) too ("give the player a
+pixel-art sprite").
+
+![OpenGenie's ECS viewer showing entities, components, and systems as a linked graph](docs/screenshot-ecs.png)
+*OpenGenie builds your games using best practices. See creation of an
+[entity-component-system](https://en.wikipedia.org/wiki/Entity_component_system).*
+
+### 4. Shipping your game
+
+When you're ready to ship, click **Export** and pick any combination of Godot's six platforms —
+Godot's export templates download automatically the first time you export:
+
+- **Windows** — a standalone `.exe`
+- **macOS** — a `.zip` containing a signed `.app` bundle
+- **Linux** — a standalone `.x86_64` binary
+- **Web** — an `index.html` you can drop on any static host and play in the browser
+- **Android** — an `.apk` (needs the Android SDK installed)
+- **iOS** — an `.ipa` (needs Xcode, macOS only)
+
+Desktop and Web exports work out of the box with no extra setup. Android and iOS need their
+platform SDKs installed locally, since those are Apple's and Google's own toolchains to sign and
+build against — OpenGenie surfaces Godot's own error messages if a step is missing. Every export
+shows up in the project's `exports/<platform>/` folder, ready to upload or hand to someone else to
+play.

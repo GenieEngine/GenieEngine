@@ -1,9 +1,17 @@
 #!/usr/bin/env node
 /**
  * Downloads the engines OpenGenie ships with — Godot and the OpenCode CLI —
- * into vendor/ for the *current* platform. Runs automatically on `npm install`
- * (postinstall) and is idempotent. electron-builder copies vendor/ into the
- * packaged app's resources, so installed builds are fully self-contained.
+ * into vendor/ for a target platform. Defaults to the *current* platform and
+ * runs automatically on `npm install` (postinstall); idempotent. electron-builder
+ * copies vendor/<platform> into that platform's packaged app resources, so
+ * installed builds are fully self-contained.
+ *
+ * To stage another platform's binaries for cross-building (e.g. building the
+ * Windows or Linux installer from macOS), pass --platform= and --arch=:
+ *   node scripts/fetch-vendor.mjs --platform=win32 --arch=x64
+ *   node scripts/fetch-vendor.mjs --platform=linux --arch=x64
+ * Extraction only needs tools available on the *host* (tar/ditto/unzip), not
+ * the target platform, so this works cross-platform from a POSIX host.
  *
  * Versions are pinned so every build bundles exactly what was tested.
  * (Git is bundled separately via the `dugite` npm dependency.)
@@ -21,8 +29,16 @@ const VENDOR = join(ROOT, 'vendor')
 const GODOT_VERSION = '4.7'
 const OPENCODE_VERSION = 'v1.17.13'
 
-const platform = process.platform
-const arch = process.arch === 'arm64' ? 'arm64' : 'x64'
+function argValue(flag) {
+  const arg = process.argv.find((a) => a.startsWith(`--${flag}=`))
+  return arg ? arg.slice(flag.length + 3) : undefined
+}
+
+const platform = argValue('platform') ?? process.platform
+const arch = (argValue('arch') ?? process.arch) === 'arm64' ? 'arm64' : 'x64'
+// Extraction tool is chosen by the *host* OS (what can actually run these
+// commands), independent of which platform's binaries we're fetching.
+const host = process.platform
 
 function godotTarget() {
   const base = `https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable`
@@ -72,11 +88,14 @@ async function download(url, dest) {
 function extract(archive, dir) {
   if (archive.endsWith('.tar.gz')) {
     execFileSync('tar', ['-xzf', archive, '-C', dir])
-  } else if (platform === 'darwin') {
-    // ditto preserves .app bundle structure, symlinks and permissions.
+  } else if (host === 'darwin') {
+    // ditto preserves .app bundle structure, symlinks and permissions
+    // (also handles plain zips fine when fetching a non-mac target).
     execFileSync('ditto', ['-xk', archive, dir])
-  } else if (platform === 'win32') {
-    execFileSync('powershell', ['-NoProfile', '-Command', `Expand-Archive -Force -Path "${archive}" -DestinationPath "${dir}"`])
+  } else if (host === 'win32') {
+    // bsdtar (Windows 10 1803+) extracts zips; paths are plain args, never
+    // interpolated into a PowerShell command string (same fix as export.ts).
+    execFileSync('tar', ['-xf', archive, '-C', dir])
   } else {
     execFileSync('unzip', ['-q', '-o', archive, '-d', dir])
   }
@@ -89,7 +108,9 @@ async function fetchTarget(label, target) {
   }
   console.log(`… fetching ${label}`)
   mkdirSync(target.dir, { recursive: true })
-  const archive = join(target.dir, '_download.tmp')
+  // Preserve the real extension so extract() can tell a .tar.gz from a .zip —
+  // matters once we're fetching non-host targets (e.g. Linux's .tar.gz from macOS).
+  const archive = join(target.dir, target.url.endsWith('.tar.gz') ? '_download.tar.gz' : '_download.zip')
   try {
     await download(target.url, archive)
     extract(archive, target.dir)
@@ -101,7 +122,9 @@ async function fetchTarget(label, target) {
       )
       if (extracted) renameSync(join(target.dir, extracted), join(target.dir, target.renameTo))
     }
-    if (platform !== 'win32' && existsSync(target.check)) chmodSync(target.check, 0o755)
+    // Executable bit is meaningless on Windows but harmless to set from a
+    // POSIX host when cross-fetching the win32 target's binaries.
+    if (host !== 'win32' && existsSync(target.check)) chmodSync(target.check, 0o755)
     if (!existsSync(target.check)) throw new Error(`extraction did not produce ${target.check}`)
     console.log(`✓ ${label} ready`)
   } finally {

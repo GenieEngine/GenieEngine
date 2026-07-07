@@ -1,5 +1,5 @@
 import { mkdir, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { assetDir, credentialsStore } from './asset-store'
 
 /**
@@ -100,7 +100,9 @@ export async function generateImageAsset(projectPath: string, request: GenerateI
   }
 
   await mkdir(dir.abs, { recursive: true })
-  const fileName = `${dir.rel.split('/').pop()}.png`
+  // basename, not a '/'-split: dir.rel comes from path.join, which uses '\'
+  // on Windows — splitting on '/' would put the whole path into the name.
+  const fileName = `${basename(dir.rel)}.png`
   await writeFile(join(dir.abs, fileName), png)
 
   return {
