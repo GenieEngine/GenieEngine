@@ -11,7 +11,7 @@ an API key.
 
 ![OpenGenie running a game built with it, chat on the right, embedded game view on the left](docs/screenshot.png)
 *OpenGenie automatically tests your game, so you spend less time debugging, and more time in the
-creative process of creating your game.*
+creative process of creating your game. [Play demo here](https://legojazz.itch.io/cube-world-opengenie-demo).*
 
 ## Free and Open Source
 
@@ -49,9 +49,9 @@ work end-to-end.
 
 | Platform | Download |
 | --- | --- |
-| macOS (Apple Silicon & Intel) | [OpenGenie.dmg](https://github.com/godotengine/godot/releases/download/4.7-stable/OpenGenie-0.1.0-arm64.dmg) |
-| Windows | [OpenGenie-Setup.exe](https://github.com/godotengine/godot/releases/download/4.7-stable/OpenGenie.Setup.0.1.0.exe) |  Note: I don't have a Windows machine, so this is untested
-| Linux | [OpenGenie.AppImage](https://github.com/godotengine/godot/releases/download/4.7-stable/OpenGenie-0.1.0.AppImage) |  Note: I don't have a Linux machine, so this is untested
+| macOS (Apple Silicon & Intel) | [OpenGenie.dmg](https://github.com/legojazz/OpenGenie/releases/download/4.7-stable/OpenGenie-0.1.0-arm64.dmg) |
+| Windows | [OpenGenie-Setup.exe](https://github.com/legojazz/OpenGenie/releases/download/4.7-stable/OpenGenie.Setup.0.1.0.exe) |  Note: I don't have a Windows machine, so this is untested
+| Linux | [OpenGenie.AppImage](https://github.com/legojazz/OpenGenie/releases/download/4.7-stable/OpenGenie-0.1.0.AppImage) |  Note: I don't have a Linux machine, so this is untested
 
 ## Getting started
 
