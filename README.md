@@ -49,9 +49,9 @@ work end-to-end.
 
 | Platform | Download |
 | --- | --- |
-| macOS (Apple Silicon & Intel) | [OpenGenie.dmg](https://github.com/legojazz/OpenGenie/releases/download/4.7-stable/OpenGenie-0.1.0-arm64.dmg) |
-| Windows | [OpenGenie-Setup.exe](https://github.com/legojazz/OpenGenie/releases/download/4.7-stable/OpenGenie.Setup.0.1.0.exe) |  Note: I don't have a Windows machine, so this is untested
-| Linux | [OpenGenie.AppImage](https://github.com/legojazz/OpenGenie/releases/download/4.7-stable/OpenGenie-0.1.0.AppImage) |  Note: I don't have a Linux machine, so this is untested
+| macOS (Apple Silicon & Intel) | [OpenGenie.dmg](https://github.com/legojazz/OpenGenie/releases/download/v0.1.0/OpenGenie-0.1.0-arm64.dmg) |
+| Windows | [OpenGenie-Setup.exe](https://github.com/legojazz/OpenGenie/releases/download/v0.1.0/OpenGenie.Setup.0.1.0.exe) |  Note: I don't have a Windows machine, so this is untested
+| Linux | [OpenGenie.AppImage](https://github.com/legojazz/OpenGenie/releases/download/v0.1.0/OpenGenie-0.1.0.AppImage) |  Note: I don't have a Linux machine, so this is untested
 
 ## Getting started
 
