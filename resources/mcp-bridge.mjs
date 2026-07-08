@@ -138,7 +138,8 @@ const TOOLS = [
   },
   {
     name: 'game_screenshot',
-    description: 'Capture a PNG screenshot of the running test game (rendered off-screen). Returns the image.',
+    description:
+      'Capture a PNG screenshot of the running test game (rendered off-screen). Returns the image and saves it inside the project at .opengenie/test-shots/ — if you cannot view images yourself, hand that saved path to the image-reader subagent. Never copy screenshots or read them from anywhere else.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false }
   },
   {

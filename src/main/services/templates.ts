@@ -111,7 +111,7 @@ opengenie_test_agent.gd
 # OpenGenie export output
 exports/
 
-# OpenGenie local chat history (personal, never shared)
+# OpenGenie local state (chat history, attachments, test screenshots)
 .opengenie/
 `
 }
@@ -332,10 +332,12 @@ unless your model views images):
 2. \`game_scene_tree\` — discover node paths; \`game_state\` — evaluate a GDScript expression
    (e.g. \`get_node("/root/Main/Score").text\`) to assert state.
 3. \`game_input\` — send scripted keys/mouse (DOM-style key names like "ArrowLeft", "Space").
-4. \`game_screenshot\` — capture a PNG of the running game; \`game_logs\` — read the game's
-   console output (prints and script errors). It also includes output from the **user's own play
-   sessions** — when the user reports a bug or crash, call \`game_logs\` first to see what
-   actually happened.
+4. \`game_screenshot\` — capture a PNG of the running game. It returns the image AND saves
+   it inside the project at \`.opengenie/test-shots/\`; if you can't view images, hand that
+   in-project path to **image-reader** — never copy screenshots or look for them anywhere
+   else. \`game_logs\` — read the game's console output (prints and script errors). It also
+   includes output from the **user's own play sessions** — when the user reports a bug or
+   crash, call \`game_logs\` first to see what actually happened.
 5. \`stop_game_test\` — always stop the run when you're finished.
 
 ### When to test — use judgment, testing takes real time

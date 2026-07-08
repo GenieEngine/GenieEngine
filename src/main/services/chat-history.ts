@@ -13,6 +13,9 @@ import type { ChatAttachment } from '../../shared/types'
  *                       the composer. Intentionally survives /clear.
  * - attachments/        images the user attached to messages, saved so the
  *                       AI's image-enabled subagents can open them by path.
+ * - test-shots/         screenshots the AI takes of the running game (written
+ *                       by test-harness.ts) — in-project so agents can read
+ *                       them without leaving the project directory.
  *
  * The transcript is stored as the renderer's own message JSON — the main
  * process treats it as opaque (`unknown[]`) and the renderer validates shape
@@ -52,7 +55,11 @@ async function writeJsonAtomic(path: string, value: unknown): Promise<void> {
 /** Projects whose .gitignore already got the .opengenie/ entry this run. */
 const ignoreEnsured = new Set<string>()
 
-async function ensureStateDir(projectPath: string): Promise<string> {
+/**
+ * Creates the project's .opengenie/ state dir and keeps it out of both git
+ * and Godot. Shared with test-harness.ts, which stores game screenshots here.
+ */
+export async function ensureProjectStateDir(projectPath: string): Promise<string> {
   const dir = join(projectPath, STATE_DIR)
   await mkdir(dir, { recursive: true })
   if (!ignoreEnsured.has(projectPath)) {
@@ -62,9 +69,13 @@ async function ensureStateDir(projectPath: string): Promise<string> {
     const gitignorePath = join(projectPath, '.gitignore')
     const current = await readFile(gitignorePath, 'utf8').catch(() => '')
     if (!current.split('\n').some((line) => line.trim().replace(/\/$/, '') === STATE_DIR)) {
-      const entry = `${current && !current.endsWith('\n') ? '\n' : ''}\n# OpenGenie local chat history (personal, never shared)\n${STATE_DIR}/\n`
+      const entry = `${current && !current.endsWith('\n') ? '\n' : ''}\n# OpenGenie local state (chat history, attachments, test screenshots)\n${STATE_DIR}/\n`
       await writeFile(gitignorePath, current + entry).catch(() => {})
     }
+    // .gdignore makes Godot skip the directory entirely — without it the
+    // editor would import attachments/screenshots as game resources (.import
+    // sidecars) and drag them into exports.
+    await writeFile(join(dir, '.gdignore'), '', { flag: 'wx' }).catch(() => {})
   }
   return dir
 }
@@ -85,13 +96,13 @@ export async function saveChatHistory(
   messages: unknown[],
   sessionID: string | null
 ): Promise<void> {
-  const dir = await ensureStateDir(projectPath)
+  const dir = await ensureProjectStateDir(projectPath)
   await writeJsonAtomic(join(dir, CHAT_FILE), { version: 1, sessionID, messages })
 }
 
 export async function appendInputHistory(projectPath: string, entry: string): Promise<void> {
   if (!entry.trim()) return
-  const dir = await ensureStateDir(projectPath)
+  const dir = await ensureProjectStateDir(projectPath)
   const path = join(dir, INPUT_FILE)
   const entries = (await readJson<{ entries?: string[] }>(path))?.entries ?? []
   if (entries[entries.length - 1] === entry) return // consecutive repeat
@@ -120,7 +131,7 @@ export async function saveChatAttachments(
   attachments: ChatAttachment[]
 ): Promise<string[]> {
   if (attachments.length === 0) return []
-  const dir = join(await ensureStateDir(projectPath), ATTACH_DIR)
+  const dir = join(await ensureProjectStateDir(projectPath), ATTACH_DIR)
   await mkdir(dir, { recursive: true })
   const stamp = Date.now()
   const saved: string[] = []

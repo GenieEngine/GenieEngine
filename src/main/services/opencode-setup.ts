@@ -120,7 +120,8 @@ export function applyAgentConfig(config: Record<string, unknown>, imageModelRef:
   agents[IMAGE_READER_AGENT] = {
     description:
       'Views image files and reports their contents in detail: user-attached references ' +
-      '(saved under .opengenie/attachments/), generated art, or any image in the project. ' +
+      '(saved under .opengenie/attachments/), game screenshots (saved under ' +
+      '.opengenie/test-shots/), generated art, or any image in the project. ' +
       'Give it the image path(s) and the questions you need answered.',
     mode: 'subagent',
     model: imageModelRef,

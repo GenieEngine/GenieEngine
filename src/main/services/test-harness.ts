@@ -1,9 +1,10 @@
 import { app } from 'electron'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { readFile } from 'node:fs/promises'
+import { readdir, readFile, rm } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { join } from 'node:path'
+import { ensureProjectStateDir } from './chat-history'
 import { getCurrentProject } from '../state'
 import { sendToRenderer } from '../window'
 import {
@@ -46,8 +47,25 @@ function harnessFilePath(): string {
   return join(app.getPath('userData'), 'harness.json')
 }
 
-function shotsDir(): string {
-  return join(app.getPath('userData'), 'test-shots')
+/** Screenshots kept per capture — enough to compare a few frames, no unbounded growth. */
+const KEEP_SHOTS = 12
+
+/**
+ * Screenshots live INSIDE the project (.opengenie/test-shots/, gitignored and
+ * .gdignore'd via ensureProjectStateDir). They used to go to the app's
+ * userData dir, and handing that ~/Library path to the model lured it into
+ * reading/copying outside the project — which the permission policy rejects
+ * (see opencode.ts) and killed agent runs. In-project, every agent (main,
+ * image-reader, game-tester) can read a shot by its relative path freely.
+ */
+async function pruneShots(dir: string): Promise<void> {
+  try {
+    // Epoch-ms filenames are fixed-width, so the lexicographic sort is chronological.
+    const shots = (await readdir(dir)).filter((f) => /^shot-\d+\.png$/.test(f)).sort()
+    for (const old of shots.slice(0, -KEEP_SHOTS)) await rm(join(dir, old), { force: true })
+  } catch {
+    // Housekeeping only — never fail the screenshot over it.
+  }
 }
 
 interface ToolResult {
@@ -91,15 +109,28 @@ async function runTool(name: string, args: Record<string, unknown>): Promise<Too
       return { ok: true, text: `Executed ${actions.length} input action(s).` }
     }
     case 'game_screenshot': {
-      mkdirSync(shotsDir(), { recursive: true })
-      const path = join(shotsDir(), `shot-${Date.now()}.png`)
-      const reply = await runTestCommand('screenshot', [path], 15000)
+      const project = getCurrentProject()
+      if (!project) return { ok: false, text: 'No project is open in OpenGenie.' }
+      const dir = join(await ensureProjectStateDir(project.path), 'test-shots')
+      mkdirSync(dir, { recursive: true })
+      const file = `shot-${Date.now()}.png`
+      const reply = await runTestCommand('screenshot', [join(dir, file)], 15000)
       if (!reply.ok) return { ok: false, text: reply.text }
-      const png = await readFile(path)
+      const png = await readFile(join(dir, file))
       const base64 = png.toString('base64')
       // Mirror what the AI sees into the UI (chat + game-view test monitor).
       sendToRenderer('game:test-shot', `data:image/png;base64,${base64}`)
-      return { ok: true, text: `Screenshot saved to ${path}`, imageBase64: base64 }
+      void pruneShots(dir)
+      // Relative path only: an absolute path outside the project sent agents
+      // on denied out-of-project reads (the incident this tool text prevents).
+      return {
+        ok: true,
+        text:
+          `Screenshot saved inside the project at .opengenie/test-shots/${file}. ` +
+          'If you cannot view the attached image yourself, pass that path to the ' +
+          'image-reader subagent — it reads it directly; never copy screenshots elsewhere.',
+        imageBase64: base64
+      }
     }
     case 'game_state': {
       const expression = String(args.expression ?? '')

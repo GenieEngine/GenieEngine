@@ -146,9 +146,15 @@ function isUnderRoot(dir: string, root: string): boolean {
  *  - external_directory asks for the OS temp dir are approved — shell
  *    commands legitimately stage scratch files in /tmp, and rejecting those
  *    made ordinary bash commands fail mid-turn;
- *  - other external_directory asks are rejected (the agent sees the denial
- *    and corrects course) — game work belongs inside the project;
+ *  - other external_directory asks are rejected WITH feedback telling the
+ *    agent to stay inside the project and where in-project copies of what it
+ *    usually wants (screenshots, attachments) already live;
  *  - everything else is approved.
+ *
+ * A rejection only steers the model instead of stranding the run because
+ * ensureOpencodeConfig sets experimental.continue_loop_on_deny — without it
+ * OpenCode stops the agent loop on every rejected ask and the chat sits dead
+ * until the user manually prompts "continue".
  *
  * Bash can still slip file access past OpenCode's command parsing, so this
  * reply is NOT what keeps the agent out of the user's personal folders — the
@@ -157,7 +163,9 @@ function isUnderRoot(dir: string, root: string): boolean {
 /* eslint-disable @typescript-eslint/no-explicit-any -- untyped event payload */
 function replyToPermission(sessionId: string, permissionId: string, permission: string, ask: any): void {
   if (!server) return
+  const srv = server
   let response: 'always' | 'reject' = 'always'
+  let feedback: string | undefined
   if (permission === 'external_directory') {
     // The ask names the directories involved: bash asks carry
     // metadata.directories, file-tool asks metadata.parentDir, and both carry
@@ -174,9 +182,25 @@ function replyToPermission(sessionId: string, permissionId: string, permission: 
             : []
     ).map(String)
     const inTemp = dirs.length > 0 && dirs.every((d) => TEMP_ROOTS.some((root) => isUnderRoot(d, root)))
-    response = inTemp ? 'always' : 'reject'
+    if (!inTemp) {
+      response = 'reject'
+      feedback =
+        `${dirs.join(', ') || 'That path'} is outside the project directory and off-limits. ` +
+        'Work only inside the project (the OS temp dir is fine for scratch files). ' +
+        'Game screenshots are already saved in-project under .opengenie/test-shots/ and ' +
+        'user-attached images under .opengenie/attachments/ — read them from there instead of copying.'
+    }
   }
-  void api(server, 'POST', `/session/${sessionId}/permissions/${permissionId}`, { response }).catch(() => {})
+  void (async () => {
+    try {
+      // Newer reply route: a rejection can carry feedback, which reaches the
+      // model as the tool error text so it can route around the denial.
+      await api(srv, 'POST', `/permission/${permissionId}/reply`, { reply: response, message: feedback })
+    } catch {
+      // Older servers only have the session route (feedback not supported).
+      await api(srv, 'POST', `/session/${sessionId}/permissions/${permissionId}`, { response }).catch(() => {})
+    }
+  })()
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */
 

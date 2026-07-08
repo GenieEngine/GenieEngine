@@ -50,6 +50,16 @@ export async function ensureOpencodeConfig(): Promise<void> {
     }
     config.mcp = mcp
 
+    // Without this flag OpenCode halts the whole agent run when a permission
+    // ask is rejected (the model only sees the denial after the user manually
+    // prompts again). With it, a denial comes back as a normal tool error the
+    // agent can read and route around mid-run — OpenGenie answers every ask
+    // automatically (see replyToPermission in opencode.ts), so a halt would
+    // otherwise strand the chat on every rejected out-of-project access.
+    const experimental = (config.experimental ?? {}) as Record<string, unknown>
+    experimental.continue_loop_on_deny = true
+    config.experimental = experimental
+
     applyAgentConfig(config, configuredImageModel(config))
 
     if (!config.$schema) config.$schema = 'https://opencode.ai/config.json'
