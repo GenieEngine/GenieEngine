@@ -1,7 +1,7 @@
 {
   "name": "opengenie",
   "productName": "OpenGenie",
-  "version": "0.1.0",
+  "version": "0.1.1-alpha",
   "description": "AI-powered game engine — build games by chatting with an AI, powered by Godot under the hood.",
   "main": "out/main/index.js",
   "author": "Jared Zhao",
