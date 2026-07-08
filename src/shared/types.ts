@@ -66,13 +66,23 @@ export interface ChatDonePayload {
 }
 
 /**
- * A file the user attached to a chat message. Sent to the model as a message
- * part (data URL) — never written into the game project.
+ * A file the user attached to a chat message. Two flavors:
+ *
+ * - Inline (`dataUrl` set): images and small text files — ride the chat
+ *   message itself as data-URL parts, never written into the game project.
+ * - Asset upload (`path` set): .zip archives, whole folders, and binary asset
+ *   files (3D models, audio, fonts) — too big/opaque to inline, so only the
+ *   absolute disk path crosses to the main process, which copies the payload
+ *   into the project's .opengenie/attachments/ when the message is sent and
+ *   points the assistant at it there.
  */
 export interface ChatAttachment {
   name: string
   mime: string
-  dataUrl: string
+  dataUrl?: string
+  path?: string
+  /** True when `path` points at a folder. */
+  dir?: boolean
 }
 
 /**
@@ -321,6 +331,11 @@ export interface OpenGenieApi {
 
   // AI chat (OpenCode)
   chatSend(message: string, attachments?: ChatAttachment[]): Promise<Result<null>>
+  /**
+   * Absolute disk path of a picked/dropped File (Electron webUtils) — '' when
+   * it has none (e.g. a File synthesized in the page). Synchronous.
+   */
+  pathForFile(file: File): string
   chatCancel(): Promise<Result<null>>
   /** /clear: fresh conversation AND deletes the project's saved transcript. */
   chatNewSession(): Promise<Result<null>>

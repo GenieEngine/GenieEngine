@@ -8,7 +8,7 @@ import type {
   ChatQuestionRequest,
   ChatToolStatus
 } from '../../../shared/types'
-import { FileIcon, PlusIcon, SearchIcon, SendIcon, SparkIcon, StopIcon, TerminalIcon, XIcon } from './Icons'
+import { FileIcon, FolderIcon, PlusIcon, SearchIcon, SendIcon, SparkIcon, StopIcon, TerminalIcon, XIcon } from './Icons'
 
 marked.setOptions({ gfm: true, breaks: true })
 
@@ -39,16 +39,40 @@ interface ChatMessage {
   streaming?: boolean
 }
 
-// Attachments cap: data URLs ride the message to the model; keep them sane.
+// Inline attachments cap: data URLs ride the message to the model; keep them sane.
 const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024
 
-// What the assistant can digest. The file-picker enforces this via `accept`;
-// drag & drop bypasses that, so addFiles re-checks against the same list.
+// What the assistant can digest inline. The file-picker enforces this via
+// `accept`; drag & drop bypasses that, so addFiles re-checks the same lists.
 const ATTACH_EXTENSIONS = ['.txt', '.md', '.json', '.gd', '.tscn', '.cfg', '.csv', '.log', '.pdf']
-const ATTACH_ACCEPT = ['image/*', ...ATTACH_EXTENSIONS].join(',')
+
+// Asset uploads: archives and 2D/3D asset files too big or too binary to ride
+// the message as data URLs. They attach by disk path — on send the main
+// process copies them into the project's .opengenie/attachments/ and points
+// the assistant there (see saveChatUploads). Dropped/picked folders always
+// take this route. Checked against the same 512 MB cap the main process
+// enforces; folders can only be measured there, so theirs waits until send.
+const UPLOAD_EXTENSIONS = [
+  '.zip',
+  '.glb', '.gltf', '.obj', '.fbx', '.dae', '.stl', '.blend',
+  '.wav', '.ogg', '.mp3',
+  '.ttf', '.otf'
+]
+const MAX_UPLOAD_BYTES = 512 * 1024 * 1024
+const ATTACH_ACCEPT = ['image/*', ...ATTACH_EXTENSIONS, ...UPLOAD_EXTENSIONS].join(',')
 
 function isAttachable(file: File): boolean {
   return file.type.startsWith('image/') || ATTACH_EXTENSIONS.some((ext) => file.name.toLowerCase().endsWith(ext))
+}
+
+function isUpload(file: File): boolean {
+  return UPLOAD_EXTENSIONS.some((ext) => file.name.toLowerCase().endsWith(ext))
+}
+
+/** A picked/dropped file plus what only the drop event can know: folder-ness. */
+interface IncomingFile {
+  file: File
+  dir: boolean
 }
 
 /**
@@ -502,16 +526,34 @@ export function ChatPanel({ projectPath, opencodeAvailable, onAssistantDone }: P
     })
   }
 
-  const addFiles = async (files: FileList | null): Promise<void> => {
-    if (!files || files.length === 0) return
+  const addFiles = async (incoming: IncomingFile[]): Promise<void> => {
+    if (incoming.length === 0) return
     setAttachError(null)
     const next = [...attachments]
-    for (const file of Array.from(files)) {
+    for (const { file, dir } of incoming) {
+      // Folders and asset files (zips, models, audio…) attach by path — only
+      // their location crosses to the main process, which copies them into
+      // .opengenie/attachments/ when the message is sent.
+      if (dir || isUpload(file)) {
+        const path = window.api.pathForFile(file)
+        if (!path) {
+          setAttachError(`"${file.name}" has no location on disk, so it can't be attached.`)
+          continue
+        }
+        if (!dir && file.size > MAX_UPLOAD_BYTES) {
+          setAttachError(`"${file.name}" is over the ${MAX_UPLOAD_BYTES / 1024 / 1024} MB upload limit.`)
+          continue
+        }
+        if (!next.some((a) => a.path === path)) {
+          next.push({ name: file.name, mime: file.type || 'application/octet-stream', path, dir })
+        }
+        continue
+      }
       if (!isAttachable(file)) {
         setAttachError(`"${file.name}" isn't a supported attachment type.`)
         continue
       }
-      const total = next.reduce((n, a) => n + a.dataUrl.length, 0)
+      const total = next.reduce((n, a) => n + (a.dataUrl?.length ?? 0), 0)
       if (file.size > MAX_ATTACHMENT_BYTES || total + file.size * 1.4 > MAX_ATTACHMENT_BYTES) {
         setAttachError('Attachments are limited to 8 MB per message.')
         break
@@ -523,6 +565,20 @@ export function ChatPanel({ projectPath, opencodeAvailable, onAssistantDone }: P
       })
     }
     setAttachments(next)
+  }
+
+  // Attach a whole folder of assets via the native directory picker (drag &
+  // drop is the only other way in — a plain <input type="file"> can't mix
+  // files and folders).
+  const attachFolder = async (): Promise<void> => {
+    const result = await window.api.chooseDirectory()
+    if (!result.ok || !result.data) return
+    const path = result.data
+    const name = path.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || path
+    setAttachError(null)
+    setAttachments((prev) =>
+      prev.some((a) => a.path === path) ? prev : [...prev, { name, mime: 'inode/directory', path, dir: true }]
+    )
   }
 
   useEffect(() => {
@@ -726,13 +782,21 @@ export function ChatPanel({ projectPath, opencodeAvailable, onAssistantDone }: P
         e.preventDefault()
         dragDepth.current = 0
         setDragActive(false)
-        void addFiles(e.dataTransfer.files)
+        // dataTransfer.items is only readable synchronously during the event;
+        // webkitGetAsEntry is what tells a dropped folder apart from a file
+        // (the File object alone can't — folders arrive with size 0, type '').
+        const incoming: IncomingFile[] = []
+        for (const item of Array.from(e.dataTransfer.items)) {
+          const file = item.getAsFile()
+          if (file) incoming.push({ file, dir: item.webkitGetAsEntry?.()?.isDirectory ?? false })
+        }
+        void addFiles(incoming)
       }}
     >
       {dragActive && (
         <div className="drop-overlay">
           <PlusIcon size={22} />
-          <span>Drop files to attach</span>
+          <span>Drop files or folders to attach</span>
         </div>
       )}
       <div className="chat-body">
@@ -776,11 +840,11 @@ export function ChatPanel({ projectPath, opencodeAvailable, onAssistantDone }: P
               {m.attachments && m.attachments.length > 0 && (
                 <div className="msg-attachments">
                   {m.attachments.map((a, j) =>
-                    a.mime.startsWith('image/') ? (
+                    a.dataUrl && a.mime.startsWith('image/') ? (
                       <img key={j} className="attach-thumb" src={a.dataUrl} alt={a.name} title={a.name} />
                     ) : (
-                      <span key={j} className="attach-file" title={a.name}>
-                        <FileIcon size={11} /> {a.name}
+                      <span key={j} className="attach-file" title={a.path ?? a.name}>
+                        {a.dir ? <FolderIcon size={11} /> : <FileIcon size={11} />} {a.name}
                       </span>
                     )
                   )}
@@ -853,9 +917,11 @@ export function ChatPanel({ projectPath, opencodeAvailable, onAssistantDone }: P
           {(attachments.length > 0 || attachError) && (
             <div className="attach-row">
               {attachments.map((a, i) => (
-                <span key={i} className="attach-chip" title={a.name}>
-                  {a.mime.startsWith('image/') ? (
+                <span key={i} className="attach-chip" title={a.path ?? a.name}>
+                  {a.dataUrl && a.mime.startsWith('image/') ? (
                     <img className="attach-chip-thumb" src={a.dataUrl} alt="" />
+                  ) : a.dir ? (
+                    <FolderIcon size={11} />
                   ) : (
                     <FileIcon size={11} />
                   )}
@@ -958,17 +1024,26 @@ export function ChatPanel({ projectPath, opencodeAvailable, onAssistantDone }: P
               accept={ATTACH_ACCEPT}
               style={{ display: 'none' }}
               onChange={(e) => {
-                void addFiles(e.target.files)
+                void addFiles(Array.from(e.target.files ?? []).map((file) => ({ file, dir: false })))
                 e.target.value = ''
               }}
             />
-            <button
-              className="attach-btn"
-              title="Attach files or images — or drag & drop them into the chat (stay in the chat, not added to your game)"
-              onClick={() => fileInputRef.current?.click()}
-            >
-              <PlusIcon size={14} />
-            </button>
+            <div className="attach-btns">
+              <button
+                className="attach-btn"
+                title="Attach files, images, or .zip asset packs — or drag & drop them (folders too) into the chat"
+                onClick={() => fileInputRef.current?.click()}
+              >
+                <PlusIcon size={14} />
+              </button>
+              <button
+                className="attach-btn"
+                title="Attach a folder of assets — uploaded for the assistant when you send"
+                onClick={() => void attachFolder()}
+              >
+                <FolderIcon size={13} />
+              </button>
+            </div>
             {streaming ? (
               <button className="send-btn stop" title="Stop" onClick={() => void window.api.chatCancel()}>
                 <StopIcon size={13} />

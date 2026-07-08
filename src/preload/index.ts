@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { OpenGenieApi } from '../shared/types'
 
 function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
@@ -38,6 +38,16 @@ const api: OpenGenieApi = {
   onGameFps: (cb) => subscribe('game:fps', cb),
 
   chatSend: (message, attachments) => invoke('chat:send', message, attachments),
+  // File objects lost their .path in modern Electron — this is the sanctioned
+  // way for the renderer to learn where a dropped/picked file lives on disk
+  // (asset uploads travel by path, not by value; see ChatAttachment).
+  pathForFile: (file) => {
+    try {
+      return webUtils.getPathForFile(file)
+    } catch {
+      return '' // synthesized Files have no disk path
+    }
+  },
   chatCancel: () => invoke('chat:cancel'),
   chatNewSession: () => invoke('chat:new'),
   chatLoadState: (projectPath) => invoke('chat:loadState', projectPath),

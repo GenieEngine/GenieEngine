@@ -1826,6 +1826,11 @@ button:disabled {
   padding: 2px 2px 0;
 }
 
+.attach-btns {
+  display: flex;
+  gap: 4px;
+}
+
 .attach-btn {
   display: inline-flex;
   align-items: center;

@@ -7,7 +7,7 @@ import { homedir, tmpdir } from 'node:os'
 import { dirname, join, sep } from 'node:path'
 import { sendToRenderer } from '../window'
 import { resolveOpencode } from './binaries'
-import { saveChatAttachments } from './chat-history'
+import { saveChatAttachments, saveChatUploads, type SavedUpload } from './chat-history'
 // Benign import cycle (opencode-setup imports shutdownChat): both sides only
 // use the other's exports at call time, never during module evaluation.
 import { GAME_TESTER_AGENT, IMAGE_READER_AGENT } from './opencode-setup'
@@ -196,7 +196,8 @@ function replyToPermission(sessionId: string, permissionId: string, permission: 
         `${dirs.join(', ') || 'That path'} is outside the project directory and off-limits. ` +
         'Work only inside the project (the OS temp dir is fine for scratch files). ' +
         'Game screenshots are already saved in-project under .opengenie/test-shots/ and ' +
-        'user-attached images under .opengenie/attachments/ — read them from there instead of copying.'
+        'user-attached files (images, zips, asset folders) under .opengenie/attachments/ — ' +
+        'read them from there instead of copying.'
     }
   }
   void (async () => {
@@ -541,9 +542,16 @@ export async function sendChatMessage(
   cancelled = false
 
   let srv: OpencodeServer
+  let uploaded: SavedUpload[] = []
   try {
     srv = await ensureServer(projectPath)
     await assertProviderAvailable(srv)
+    // Asset uploads (zips, folders, models…) are copied into the project's
+    // .opengenie/attachments/ — the only place the sandboxed assistant can
+    // reach them. Unlike the best-effort image saving below, a failure here
+    // fails the whole send: the message must not describe files that never
+    // arrived. The error text is user-readable (caps, unreadable source).
+    uploaded = await saveChatUploads(projectPath, attachments.filter((a) => a.path))
     // A session restored from a saved chat continues that conversation (OpenCode
     // persists sessions per directory) — but only if the server still knows it;
     // otherwise fall back to a fresh session rather than failing the send.
@@ -571,7 +579,7 @@ export async function sendChatMessage(
   // reach an image through a file path. Best-effort — a failed save just
   // means the message goes out the old way.
   let text = message
-  const images = attachments.filter((a) => a.mime.startsWith('image/'))
+  const images = attachments.filter((a) => a.dataUrl && a.mime.startsWith('image/'))
   if (images.length) {
     const saved = await saveChatAttachments(projectPath, images).catch(() => [] as string[])
     if (saved.length) {
@@ -581,15 +589,30 @@ export async function sendChatMessage(
         `image-reader subagent with the path${saved.length > 1 ? 's' : ''}.]`
     }
   }
+  // Asset uploads reach the model as paths only (copied above) — a zip or a
+  // 40 MB GLB as a base64 message part would be useless to it. The note also
+  // spells out the .opengenie/ catch: Godot ignores that directory, so assets
+  // must be copied into the game tree to be usable.
+  if (uploaded.length) {
+    const list = uploaded.map((u) => (u.dir ? `${u.rel}/ (folder)` : u.rel)).join(', ')
+    text +=
+      `\n\n[The user uploaded asset file${uploaded.length > 1 ? 's' : ''} with this message, ` +
+      `saved in the project at: ${list}. Explore what's inside — extract any .zip first ` +
+      '(e.g. `unzip -o <file>.zip -d <folder>`). Everything under .opengenie/ is invisible ' +
+      'to Godot, so copy the files the game needs into the proper assets/ sub-folders ' +
+      'before wiring them into scenes.]'
+  }
 
-  // Attachments travel as data-URL file parts in the message itself —
+  // Inline attachments travel as data-URL file parts in the message itself —
   // they reach the model directly when it supports image input.
-  const parts: unknown[] = attachments.map((a) => ({
-    type: 'file',
-    mime: a.mime,
-    filename: a.name,
-    url: a.dataUrl
-  }))
+  const parts: unknown[] = attachments
+    .filter((a) => a.dataUrl)
+    .map((a) => ({
+      type: 'file',
+      mime: a.mime,
+      filename: a.name,
+      url: a.dataUrl
+    }))
   parts.push({ type: 'text', text })
 
   void (async () => {

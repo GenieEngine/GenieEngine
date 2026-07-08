@@ -197,6 +197,21 @@ art, and keep referring back to it:
   subagent screenshot the running game and compare it against the reference before
   reporting back.
 
+## User-uploaded asset packs (zips & folders)
+
+Users can also attach whole asset packs — \`.zip\` archives, folders, or single asset
+files (3D models, audio, fonts). Each is copied into the project under
+\`.opengenie/attachments/\` and its path listed in the message.
+
+- Extract zip archives before use (e.g. \`unzip -o <file>.zip -d <folder>\`), then look
+  through what arrived (use the image-reader subagent on previews/sprites if you cannot
+  view images).
+- Everything under \`.opengenie/\` is invisible to Godot and git. To USE an asset in the
+  game, copy it into the proper \`assets/\` sub-folder first (following the layout above),
+  then wire it into scenes — never reference \`.opengenie/...\` paths from game code.
+- Copy selectively: just the files the game needs, renamed to fit the project, not the
+  whole pack.
+
 ## Architecture — Entity Component System (required)
 
 Structure ALL game code as ECS, mapped onto Godot like this:

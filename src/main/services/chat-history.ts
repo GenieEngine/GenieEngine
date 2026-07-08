@@ -1,5 +1,5 @@
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { copyFile, cp, lstat, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { basename, join } from 'node:path'
 import type { ChatAttachment } from '../../shared/types'
 
 /**
@@ -11,8 +11,10 @@ import type { ChatAttachment } from '../../shared/types'
  *                       it, so a cleared chat stays cleared.
  * - input-history.json  every message the user has sent, for ↑/↓ recall in
  *                       the composer. Intentionally survives /clear.
- * - attachments/        images the user attached to messages, saved so the
- *                       AI's image-enabled subagents can open them by path.
+ * - attachments/        files the user attached to messages: images saved so
+ *                       the AI's image-enabled subagents can open them by
+ *                       path, plus asset uploads (zips/folders/models) copied
+ *                       here so the sandboxed assistant can reach them at all.
  * - test-shots/         screenshots the AI takes of the running game (written
  *                       by test-harness.ts) — in-project so agents can read
  *                       them without leaving the project directory.
@@ -122,6 +124,21 @@ export async function clearChatHistory(projectPath: string): Promise<void> {
 }
 
 /**
+ * Attachment names come from the user's filesystem — keep a recognizable slug
+ * but drop anything path-hostile; callers add a timestamp prefix to de-dupe.
+ */
+function slugName(name: string, fallback: string): string {
+  return name.replace(/[^\w.-]+/g, '_').slice(0, 40) || fallback
+}
+
+/** The attachments dir, created (with the state dir around it) on demand. */
+async function ensureAttachmentsDir(projectPath: string): Promise<string> {
+  const dir = join(await ensureProjectStateDir(projectPath), ATTACH_DIR)
+  await mkdir(dir, { recursive: true })
+  return dir
+}
+
+/**
  * Writes message attachments into .opengenie/attachments/ and returns their
  * project-relative paths (POSIX-style, ready for the message text). Saving to
  * disk is what lets an image reach the image-enabled subagents: they never
@@ -134,20 +151,13 @@ export async function saveChatAttachments(
   attachments: ChatAttachment[]
 ): Promise<string[]> {
   if (attachments.length === 0) return []
-  const dir = join(await ensureProjectStateDir(projectPath), ATTACH_DIR)
-  await mkdir(dir, { recursive: true })
+  const dir = await ensureAttachmentsDir(projectPath)
   const stamp = Date.now()
   const saved: string[] = []
   for (const [i, attachment] of attachments.entries()) {
-    const comma = attachment.dataUrl.indexOf(',')
-    if (comma === -1) continue
-    // Attachment names come from the user's filesystem — keep a recognizable
-    // slug but drop anything path-hostile; the timestamp prefix de-dupes.
-    const base =
-      attachment.name
-        .replace(/\.[^.]*$/, '')
-        .replace(/[^\w.-]+/g, '_')
-        .slice(0, 40) || 'image'
+    const comma = attachment.dataUrl?.indexOf(',') ?? -1
+    if (!attachment.dataUrl || comma === -1) continue
+    const base = slugName(attachment.name.replace(/\.[^.]*$/, ''), 'image')
     const ext =
       attachment.name.match(/\.([A-Za-z0-9]+)$/)?.[1] ??
       attachment.mime.split('/')[1]?.split('+')[0] ??
@@ -155,6 +165,97 @@ export async function saveChatAttachments(
     const file = `${stamp}-${i}-${base}.${ext}`
     await writeFile(join(dir, file), Buffer.from(attachment.dataUrl.slice(comma + 1), 'base64'))
     saved.push(`${STATE_DIR}/${ATTACH_DIR}/${file}`)
+  }
+  return saved
+}
+
+// Asset uploads are copied wholesale from the user's disk, so unlike inline
+// attachments they need real limits: a mis-drop (a whole home folder, a game's
+// export directory) must fail fast instead of flooding the project.
+const MAX_UPLOAD_BYTES = 512 * 1024 * 1024
+const MAX_UPLOAD_FILES = 5000
+// OS/tooling litter that would only confuse the assistant if it rode along.
+const JUNK_NAMES = new Set(['.DS_Store', 'Thumbs.db', '.git', '__MACOSX'])
+
+/**
+ * Total size/count of a directory tree, counted the way the copy will see it
+ * (junk skipped, symlinks not followed — a link cycle must not hang this).
+ * Stops early once past the caps; the exact totals beyond them don't matter.
+ */
+async function measureTree(path: string): Promise<{ files: number; bytes: number }> {
+  const info = await lstat(path)
+  if (info.isSymbolicLink() || JUNK_NAMES.has(basename(path))) return { files: 0, bytes: 0 }
+  if (!info.isDirectory()) return { files: 1, bytes: info.size }
+  let files = 0
+  let bytes = 0
+  for (const entry of await readdir(path)) {
+    const sub = await measureTree(join(path, entry))
+    files += sub.files
+    bytes += sub.bytes
+    if (files > MAX_UPLOAD_FILES || bytes > MAX_UPLOAD_BYTES) break
+  }
+  return { files, bytes }
+}
+
+export interface SavedUpload {
+  /** Project-relative POSIX path, ready for the message text. */
+  rel: string
+  dir: boolean
+}
+
+/**
+ * Copies path-based asset uploads (zips, folders, binary asset files) into
+ * .opengenie/attachments/. The copy — rather than referencing the original
+ * location — is what makes the upload usable at all: the assistant's sandbox
+ * confines it to the project directory, so a path under ~/Downloads might as
+ * well not exist. Throws (with a user-readable message) when a source is
+ * unreadable or over the caps: the send must fail loudly rather than tell the
+ * model about files that never arrived.
+ */
+export async function saveChatUploads(
+  projectPath: string,
+  uploads: ChatAttachment[]
+): Promise<SavedUpload[]> {
+  if (uploads.length === 0) return []
+  const dir = await ensureAttachmentsDir(projectPath)
+  const stamp = Date.now()
+  const saved: SavedUpload[] = []
+  for (const [i, upload] of uploads.entries()) {
+    if (!upload.path) continue
+    // stat (not lstat): a dropped path that is itself a symlink means the
+    // user wants what it points at.
+    const info = await stat(upload.path).catch(() => null)
+    if (!info) throw new Error(`"${upload.name}" could not be read from ${upload.path}.`)
+    if (info.isDirectory()) {
+      const { files, bytes } = await measureTree(upload.path)
+      if (bytes > MAX_UPLOAD_BYTES || files > MAX_UPLOAD_FILES) {
+        throw new Error(
+          `The folder "${upload.name}" is too large to attach — uploads are limited to ` +
+            `${MAX_UPLOAD_BYTES / 1024 / 1024} MB and ${MAX_UPLOAD_FILES} files.`
+        )
+      }
+      const name = `${stamp}-${i}-${slugName(upload.name, 'folder')}`
+      await cp(upload.path, join(dir, name), {
+        recursive: true,
+        // Symlinks are skipped, not resolved: a link reaching outside the
+        // tree would silently defeat the size cap (and the sandbox would
+        // refuse the copied link's target anyway).
+        filter: async (src) => !JUNK_NAMES.has(basename(src)) && !(await lstat(src)).isSymbolicLink()
+      })
+      saved.push({ rel: `${STATE_DIR}/${ATTACH_DIR}/${name}`, dir: true })
+    } else {
+      if (info.size > MAX_UPLOAD_BYTES) {
+        throw new Error(
+          `"${upload.name}" is too large to attach — uploads are limited to ${MAX_UPLOAD_BYTES / 1024 / 1024} MB.`
+        )
+      }
+      // Slug the base name but keep the real extension — tools key off it.
+      const ext = upload.name.match(/\.([A-Za-z0-9]+)$/)?.[1]
+      const base = slugName(upload.name.replace(/\.[^.]*$/, ''), 'upload')
+      const name = `${stamp}-${i}-${base}${ext ? `.${ext}` : ''}`
+      await copyFile(upload.path, join(dir, name))
+      saved.push({ rel: `${STATE_DIR}/${ATTACH_DIR}/${name}`, dir: false })
+    }
   }
   return saved
 }

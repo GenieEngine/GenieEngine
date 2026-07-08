@@ -25,7 +25,7 @@ function createWindow(): void {
     ...(process.platform === 'darwin' ? { titleBarStyle: 'hiddenInset' as const } : {}),
     webPreferences: {
       // Renderer stays sandboxed (the Electron default): the preload only
-      // uses contextBridge/ipcRenderer, which sandboxed preloads support.
+      // uses contextBridge/ipcRenderer/webUtils, which sandboxed preloads support.
       preload: join(__dirname, '../preload/index.js')
     }
   })
