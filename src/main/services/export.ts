@@ -185,6 +185,31 @@ async function ensureEtc2Astc(projectPath: string): Promise<void> {
   await writeFile(file, src)
 }
 
+/**
+ * Exported games must never boot on the Godot-logo splash — they should look
+ * like the creator's game, not the engine's demo. New projects get these
+ * settings from the template (see templates.ts); this covers projects created
+ * before that and imported ones. Same semantics as ensureEtc2Astc: a project
+ * that already made a splash choice (its own image, or show_image set either
+ * way) is deliberate and is left alone.
+ */
+async function ensureNoBootSplash(projectPath: string): Promise<void> {
+  const file = join(projectPath, 'project.godot')
+  let src = await readFile(file, 'utf8')
+  if (src.includes('boot_splash/image') || src.includes('boot_splash/show_image')) return
+  // Boot to plain black (the standard "professional" launch look) instead of
+  // Godot's default gray splash background.
+  const lines = ['boot_splash/show_image=false']
+  if (!src.includes('boot_splash/bg_color')) lines.unshift('boot_splash/bg_color=Color(0, 0, 0, 1)')
+  const settings = lines.join('\n')
+  if (/^\[application\]$/m.test(src)) {
+    src = src.replace(/^\[application\]$/m, `[application]\n\n${settings}`)
+  } else {
+    src += `\n[application]\n\n${settings}\n`
+  }
+  await writeFile(file, src)
+}
+
 /** A freshly generated preset block; the index is assigned by ensurePresets. */
 function presetBlock(spec: PlatformSpec, slug: string): string {
   // The options section must not be empty — Godot's config parser rejects a
@@ -282,6 +307,7 @@ export async function runExport(projectPath: string, baseName: string, platformI
     await ensureTemplates()
 
     await ensureEtc2Astc(projectPath)
+    await ensureNoBootSplash(projectPath)
     await ensurePresets(projectPath, specs, slug)
 
     for (const spec of specs) {

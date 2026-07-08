@@ -4,7 +4,7 @@ import { registerIpcHandlers } from './ipc'
 import { loadShellPath } from './services/binaries'
 import { stopGame } from './services/game'
 import { shutdownChat } from './services/opencode'
-import { ensureOpencodeMcpConfig } from './services/opencode-config'
+import { ensureOpencodeConfig } from './services/opencode-config'
 import { startTestHarness, stopTestHarness } from './services/test-harness'
 import { loadSettings } from './state'
 import { sendToRenderer, setMainWindow } from './window'
@@ -75,7 +75,7 @@ app.whenReady().then(async () => {
   await loadShellPath()
   loadSettings()
   // Before any chat server starts: OpenCode reads its config at boot.
-  await ensureOpencodeMcpConfig()
+  await ensureOpencodeConfig()
   startTestHarness()
   registerIpcHandlers()
   createWindow()

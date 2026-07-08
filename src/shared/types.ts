@@ -116,17 +116,42 @@ export interface ChatQuestionRequest {
   questions: ChatQuestion[]
 }
 
-/** State of the AI provider setup (API key / endpoint / model). */
+/** State of the AI provider setup (API keys / endpoints / models). */
 export interface SetupStatus {
-  /** True once the configured endpoint has a usable credential. */
+  /** True once the main coding model's endpoint has a usable credential. */
   configured: boolean
-  /** Base URL of the OpenAI-compatible API the coding agent talks to. */
+  /** Base URL of the OpenAI-compatible API the main coding agent talks to. */
   endpoint: string
   model: string
+  /** Endpoint of the image-enabled model that powers the image-reader and game-tester subagents. */
+  imageEndpoint: string
+  imageModel: string
+  /** True once the image model's endpoint has a usable credential. */
+  imageConfigured: boolean
   /** True when Tencent HY 3D credentials are stored (enables 3D asset generation). */
   hy3dConfigured: boolean
   /** True when an OpenAI key is stored (enables 2D image asset generation). */
   gptImageConfigured: boolean
+}
+
+/**
+ * Everything the AI settings panel saves in one go. Blank credential fields
+ * mean "leave the stored key unchanged"; blank endpoints/models fall back to
+ * the defaults.
+ */
+export interface SetupRequest {
+  /** Main coding model: endpoint + model + key. */
+  endpoint: string
+  model: string
+  apiKey: string
+  /** Image-enabled model used by the image-reader and game-tester subagents. */
+  imageEndpoint: string
+  imageModel: string
+  imageApiKey: string
+  /** Optional asset-generation credentials (blank = unchanged). */
+  tencentSecretId?: string
+  tencentSecretKey?: string
+  openaiApiKey?: string
 }
 
 /** A generated asset preview pushed into the chat so the user can react to it. */
@@ -306,15 +331,8 @@ export interface OpenGenieApi {
   /** Dismiss a pending question (the assistant is told and continues without answers). */
   chatRejectQuestion(requestID: string): Promise<Result<null>>
   getSetupStatus(): Promise<Result<SetupStatus>>
-  /** Optional credential fields left blank = leave that provider's setup unchanged. */
-  saveSetup(
-    endpoint: string,
-    model: string,
-    apiKey: string,
-    tencentSecretId?: string,
-    tencentSecretKey?: string,
-    openaiApiKey?: string
-  ): Promise<Result<SetupStatus>>
+  /** Credential fields left blank = leave that provider's setup unchanged. */
+  saveSetup(request: SetupRequest): Promise<Result<SetupStatus>>
   onChatPart(cb: (part: ChatPartUpdate) => void): () => void
   onChatDone(cb: (payload: ChatDonePayload) => void): () => void
   /** A generated 2D/3D asset preview to render in the chat (user can give feedback). */

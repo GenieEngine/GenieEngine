@@ -1,8 +1,13 @@
+import { app } from 'electron'
 import { spawn, type ChildProcess } from 'node:child_process'
+import { realpathSync } from 'node:fs'
 import { request as httpRequest, get as httpGet } from 'node:http'
 import { createServer } from 'node:net'
+import { homedir, tmpdir } from 'node:os'
+import { dirname, join, sep } from 'node:path'
 import { sendToRenderer } from '../window'
 import { resolveOpencode } from './binaries'
+import { saveChatAttachments } from './chat-history'
 import { getHarnessEndpoint } from './test-harness'
 import type { ChatAttachment, ChatPartUpdate, ChatToolStatus } from '../../shared/types'
 
@@ -90,10 +95,16 @@ function translatePart(part: any): ChatPartUpdate | null {
       ? state.status
       : 'running'
     // Prefer the human title OpenCode assigns on completion; fall back to the
-    // tool input (file path or command) so pending chips aren't blank.
+    // tool input (file path, subagent task description, or command) so
+    // pending chips aren't blank.
     const input = state.input ?? {}
     const title: string =
-      state.title || input.filePath || input.pattern || (typeof input.command === 'string' ? input.command : '') || ''
+      state.title ||
+      input.filePath ||
+      input.pattern ||
+      input.description ||
+      (typeof input.command === 'string' ? input.command : '') ||
+      ''
     return {
       messageID: part.messageID,
       partID: part.id,
@@ -111,24 +122,70 @@ function translatePart(part: any): ChatPartUpdate | null {
 }
 
 /**
+ * External directories the agent may use freely: the OS scratch space, in
+ * every spelling it shows up under (macOS /tmp is a symlink into /private,
+ * and os.tmpdir() lives in /var/folders).
+ */
+const TEMP_ROOTS = [
+  tmpdir(),
+  ...(process.platform === 'darwin' ? ['/tmp', '/private/tmp', '/var/folders', '/private/var/folders'] : []),
+  ...(process.platform === 'linux' ? ['/tmp'] : [])
+]
+
+function isUnderRoot(dir: string, root: string): boolean {
+  // Windows paths compare case-insensitively.
+  const [a, b] = process.platform === 'win32' ? [dir.toLowerCase(), root.toLowerCase()] : [dir, root]
+  return a === b || a.startsWith(b.endsWith(sep) ? b : b + sep)
+}
+
+/**
  * OpenCode pauses the whole session until permission asks are answered, and
  * OpenGenie has no permission UI — unanswered asks would freeze the chat
- * forever. Match the CLI's autonomous behavior: allow everything inside the
- * project, reject attempts to leave it (the agent sees the denial and
- * corrects course).
+ * forever. Policy, matching the CLI's autonomous behavior:
+ *
+ *  - external_directory asks for the OS temp dir are approved — shell
+ *    commands legitimately stage scratch files in /tmp, and rejecting those
+ *    made ordinary bash commands fail mid-turn;
+ *  - other external_directory asks are rejected (the agent sees the denial
+ *    and corrects course) — game work belongs inside the project;
+ *  - everything else is approved.
+ *
+ * Bash can still slip file access past OpenCode's command parsing, so this
+ * reply is NOT what keeps the agent out of the user's personal folders — the
+ * macOS seatbelt around the server process is (see sandboxCommand).
  */
-function replyToPermission(sessionId: string, permissionId: string, permission: string): void {
+/* eslint-disable @typescript-eslint/no-explicit-any -- untyped event payload */
+function replyToPermission(sessionId: string, permissionId: string, permission: string, ask: any): void {
   if (!server) return
-  const response = permission === 'external_directory' ? 'reject' : 'always'
+  let response: 'always' | 'reject' = 'always'
+  if (permission === 'external_directory') {
+    // The ask names the directories involved: bash asks carry
+    // metadata.directories, file-tool asks metadata.parentDir, and both carry
+    // "<dir>/*" patterns. An ask we can't extract a directory from fails
+    // closed (reject), same as the old blanket behavior.
+    const meta = ask?.metadata ?? {}
+    const dirs: string[] = (
+      Array.isArray(meta.directories) && meta.directories.length
+        ? meta.directories
+        : typeof meta.parentDir === 'string' && meta.parentDir
+          ? [meta.parentDir]
+          : Array.isArray(ask?.patterns)
+            ? ask.patterns.map((p: unknown) => String(p).replace(/[\\/]\*$/, ''))
+            : []
+    ).map(String)
+    const inTemp = dirs.length > 0 && dirs.every((d) => TEMP_ROOTS.some((root) => isUnderRoot(d, root)))
+    response = inTemp ? 'always' : 'reject'
+  }
   void api(server, 'POST', `/session/${sessionId}/permissions/${permissionId}`, { response }).catch(() => {})
 }
+/* eslint-enable @typescript-eslint/no-explicit-any */
 
 function handleEvent(evt: any): void {
   const props = evt?.properties ?? {}
   if (evt?.type === 'permission.asked' && props.id && props.sessionID) {
-    replyToPermission(props.sessionID, props.id, String(props.permission ?? ''))
+    replyToPermission(props.sessionID, props.id, String(props.permission ?? ''), props)
   } else if (evt?.type === 'permission.v2.asked' && props.id && props.sessionID) {
-    replyToPermission(props.sessionID, props.id, String(props.action ?? ''))
+    replyToPermission(props.sessionID, props.id, String(props.action ?? ''), props)
   } else if (
     (evt?.type === 'question.asked' || evt?.type === 'question.v2.asked') &&
     props.id &&
@@ -202,6 +259,78 @@ function pumpEvents(srv: OpencodeServer): void {
   }
 }
 
+/** Quote a path as an SBPL string literal. */
+function sbplPath(p: string): string {
+  return `"${p.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
+}
+
+/** A path plus its symlink-resolved form (seatbelt matches canonical paths). */
+function withRealpath(p: string): string[] {
+  try {
+    const real = realpathSync(p)
+    return real === p ? [p] : [p, real]
+  } catch {
+    return [p]
+  }
+}
+
+/**
+ * Wraps the chat-server command in a macOS seatbelt sandbox, inherited by
+ * every tool it spawns (bash, rg, git, the MCP bridge). Two reasons:
+ *
+ *  - macOS attributes file access by this process tree to OpenGenie, so a
+ *    stray `find ~` from the model used to pop "OpenGenie would like to
+ *    access your Desktop/Photos/…" TCC dialogs at the user. Seatbelt denies
+ *    the access before TCC is ever consulted — no dialog, the command just
+ *    gets a permission error the agent can read and route around.
+ *  - OpenCode's external-directory permission asks are parsed out of bash
+ *    commands heuristically and can miss, so replyToPermission alone can't
+ *    keep the agent out of personal folders. This is the hard boundary.
+ *
+ * The profile allows everything except the user's personal and cloud-synced
+ * folders plus key credential stores. The project itself is re-allowed even
+ * when it lives inside a denied folder (projects commonly sit in Documents;
+ * SBPL is last-match-wins), and the app's own files stay readable — the
+ * opencode binary, MCP bridge, and dev vendor tree live there.
+ */
+function sandboxCommand(opencode: string, args: string[], projectPath: string): { command: string; args: string[] } {
+  if (process.platform !== 'darwin') return { command: opencode, args }
+  const home = homedir()
+  const denyDirs = [
+    app.getPath('desktop'),
+    app.getPath('documents'),
+    app.getPath('downloads'),
+    app.getPath('music'),
+    app.getPath('pictures'), // includes the Photos library
+    app.getPath('videos'),
+    join(home, 'Library', 'Mobile Documents'), // iCloud Drive
+    join(home, 'Library', 'CloudStorage'), // Google Drive / Dropbox / OneDrive mounts
+    join(home, 'Library', 'Containers'),
+    join(home, 'Library', 'Group Containers'),
+    join(home, '.ssh'),
+    join(home, '.aws'),
+    join(home, '.gnupg'),
+    '/Volumes' // removable + network drives
+  ]
+  // The MCP bridge reads harness.json from userData, so that directory stays
+  // readable — but the asset-generation API keys stored next to it don't.
+  const denyFiles = [
+    join(app.getPath('userData'), 'gptimage-credentials.json'),
+    join(app.getPath('userData'), 'hy3d-credentials.json')
+  ]
+  const allowRead = [...withRealpath(app.getAppPath()), ...withRealpath(process.resourcesPath), dirname(opencode)]
+  const allowReadWrite = withRealpath(projectPath)
+  const profile = [
+    '(version 1)',
+    '(allow default)',
+    `(deny file-read* file-write* ${denyDirs.map((p) => `(subpath ${sbplPath(p)})`).join(' ')})`,
+    `(deny file-read* ${denyFiles.map((p) => `(literal ${sbplPath(p)})`).join(' ')})`,
+    `(allow file-read* ${allowRead.map((p) => `(subpath ${sbplPath(p)})`).join(' ')})`,
+    `(allow file-read* file-write* ${allowReadWrite.map((p) => `(subpath ${sbplPath(p)})`).join(' ')})`
+  ].join('\n')
+  return { command: '/usr/bin/sandbox-exec', args: ['-p', profile, opencode, ...args] }
+}
+
 /** Kill the serve process (if any) without touching conversation state. */
 function killServer(): void {
   if (server) {
@@ -233,7 +362,12 @@ async function ensureServer(projectPath: string): Promise<OpencodeServer> {
   // reach THIS app instance even when several OpenGenie instances are running
   // (harness.json alone is shared and only names whichever registered last).
   const harness = getHarnessEndpoint()
-  const proc = spawn(opencode, ['serve', '--port', String(port), '--hostname', '127.0.0.1'], {
+  const { command, args } = sandboxCommand(
+    opencode,
+    ['serve', '--port', String(port), '--hostname', '127.0.0.1'],
+    projectPath
+  )
+  const proc = spawn(command, args, {
     cwd: projectPath,
     // PWD must match cwd — OpenCode trusts the logical PWD for its project
     // directory (see the run-mode bug this fixed in git history).
@@ -308,29 +442,37 @@ function api<T>(srv: OpencodeServer, method: string, path: string, body?: unknow
 /**
  * The most common first-run failure is a configured model whose provider has
  * no credentials (OpenCode then 500s with an opaque "UnknownError"). Check
- * proactively and explain exactly how to fix it.
+ * proactively — the main model AND the subagents' image model, which may use
+ * its own provider — and explain exactly how to fix it.
  */
 async function assertProviderAvailable(srv: OpencodeServer): Promise<void> {
   if (srv.providerChecked) return
-  let providerId: string | null = null
-  let available = true
+  let missing: string | null = null
   try {
-    const config = await api<{ model?: string }>(srv, 'GET', '/config')
-    const model = config.model
-    if (model && model.includes('/')) {
-      providerId = model.split('/')[0]
+    const config = await api<{ model?: string; agent?: Record<string, { model?: string }> }>(
+      srv,
+      'GET',
+      '/config'
+    )
+    const wanted = new Set<string>()
+    for (const ref of [config.model, ...Object.values(config.agent ?? {}).map((a) => a?.model)]) {
+      if (typeof ref === 'string' && ref.includes('/')) wanted.add(ref.split('/')[0])
+    }
+    if (wanted.size) {
       const list = await api<{ providers: { id: string }[] }>(srv, 'GET', '/config/providers')
-      available = list.providers.some((p) => p.id === providerId)
+      const available = new Set(list.providers.map((p) => p.id))
+      missing = [...wanted].find((id) => !available.has(id)) ?? null
     }
   } catch {
     return // Introspection failed — don't block the chat on it.
   }
-  if (!available && providerId) {
-    const opencode = (await resolveOpencode()) ?? 'opencode'
+  if (missing) {
+    // The settings panel writes keys for every provider we configure
+    // (including the `custom`/`image` openai-compatible ones, which
+    // `opencode auth login` has no named entry for) — point users there.
     throw new Error(
-      `The AI provider "${providerId}" isn't connected yet — its API key is missing.\n\n` +
-        `Open a terminal and run:\n\n"${opencode}" auth login\n\n` +
-        `Choose ${providerId} and paste your API key, then start a new chat (/clear).`
+      `The AI provider "${missing}" isn't connected yet — its API key is missing.\n\n` +
+        `Open the AI settings (gear icon in the sidebar) and add the API key for its endpoint, then try again.`
     )
   }
   srv.providerChecked = true
@@ -376,15 +518,33 @@ export async function sendChatMessage(
   partCache.clear()
   const currentSession = sessionID
 
+  // Image attachments are additionally saved under .opengenie/attachments/
+  // and their paths appended to the message: the main coding model may not
+  // accept image input (OpenCode then replaces the file parts below with an
+  // "ERROR: Cannot read" note), and the image-enabled subagents can only
+  // reach an image through a file path. Best-effort — a failed save just
+  // means the message goes out the old way.
+  let text = message
+  const images = attachments.filter((a) => a.mime.startsWith('image/'))
+  if (images.length) {
+    const saved = await saveChatAttachments(projectPath, images).catch(() => [] as string[])
+    if (saved.length) {
+      text +=
+        `\n\n[The attached image${saved.length > 1 ? 's are' : ' is'} also saved at: ` +
+        `${saved.join(', ')} — if you cannot view images yourself, delegate to the ` +
+        `image-reader subagent with the path${saved.length > 1 ? 's' : ''}.]`
+    }
+  }
+
   // Attachments travel as data-URL file parts in the message itself —
-  // they reach the model but are never written into the project.
+  // they reach the model directly when it supports image input.
   const parts: unknown[] = attachments.map((a) => ({
     type: 'file',
     mime: a.mime,
     filename: a.name,
     url: a.dataUrl
   }))
-  parts.push({ type: 'text', text: message })
+  parts.push({ type: 'text', text })
 
   void (async () => {
     try {

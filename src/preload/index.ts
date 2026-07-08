@@ -45,8 +45,7 @@ const api: OpenGenieApi = {
   chatAnswerQuestion: (requestID, answers) => invoke('chat:answerQuestion', requestID, answers),
   chatRejectQuestion: (requestID) => invoke('chat:rejectQuestion', requestID),
   getSetupStatus: () => invoke('chat:setupStatus'),
-  saveSetup: (endpoint, model, apiKey, tencentSecretId, tencentSecretKey, openaiApiKey) =>
-    invoke('chat:saveSetup', endpoint, model, apiKey, tencentSecretId, tencentSecretKey, openaiApiKey),
+  saveSetup: (request) => invoke('chat:saveSetup', request),
   onChatPart: (cb) => subscribe('chat:part', cb),
   onChatDone: (cb) => subscribe('chat:done', cb),
   onAssetPreview: (cb) => subscribe('chat:asset-preview', cb),

@@ -12,10 +12,13 @@ interface Props {
 type SetupTab = 'agent' | '2d' | '3d'
 
 const TABS: { id: SetupTab; label: string }[] = [
-  { id: 'agent', label: 'Coding Agent' },
+  { id: 'agent', label: 'Models' },
   { id: '2d', label: '2D Asset Generation (Optional)' },
   { id: '3d', label: '3D Asset Generation (Optional)' }
 ]
+
+/** Mirrors the main process default — used to tell "same endpoint" from "own endpoint". */
+const OPENROUTER_ENDPOINT = 'https://openrouter.ai/api/v1'
 
 /**
  * Stands in for a credential input once it's already configured, so a
@@ -31,17 +34,99 @@ function ConfiguredButton({ onClick }: { onClick: () => void }): React.JSX.Eleme
 }
 
 /**
+ * One model's connection settings: endpoint + model + API key. The Models tab
+ * shows two — the main coding model and the image-enabled model that runs the
+ * image-reader / game-tester subagents.
+ */
+function ModelSection(props: {
+  title: string
+  hint: string
+  endpoint: string
+  onEndpoint: (v: string) => void
+  model: string
+  onModel: (v: string) => void
+  modelPlaceholder: string
+  apiKey: string
+  onApiKey: (v: string) => void
+  keyPlaceholder: string
+  keyHint?: string
+  /** True while a stored key stays hidden behind the "already configured" button. */
+  keyHidden: boolean
+  /** Focus the key input when it appears (i.e. right after the reveal click). */
+  keyAutoFocus?: boolean
+  onRevealKey: () => void
+  onSubmit: () => void
+}): React.JSX.Element {
+  return (
+    <div className="setup-section">
+      <div>
+        <span className="setup-section-title">{props.title}</span>
+        <p className="setup-hint">{props.hint}</p>
+      </div>
+
+      <label className="setup-field">
+        <span className="setup-label">API endpoint</span>
+        <input
+          className="text-input"
+          value={props.endpoint}
+          spellCheck={false}
+          autoCapitalize="off"
+          onChange={(e) => props.onEndpoint(e.target.value)}
+          placeholder={OPENROUTER_ENDPOINT}
+        />
+      </label>
+
+      <label className="setup-field">
+        <span className="setup-label">Model</span>
+        <input
+          className="text-input"
+          value={props.model}
+          spellCheck={false}
+          autoCapitalize="off"
+          onChange={(e) => props.onModel(e.target.value)}
+          placeholder={props.modelPlaceholder}
+        />
+      </label>
+
+      <div className="setup-field">
+        <span className="setup-label">API key</span>
+        {props.keyHidden ? (
+          <ConfiguredButton onClick={props.onRevealKey} />
+        ) : (
+          <input
+            className="text-input"
+            type="password"
+            value={props.apiKey}
+            spellCheck={false}
+            autoComplete="off"
+            autoFocus={props.keyAutoFocus}
+            onChange={(e) => props.onApiKey(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && props.onSubmit()}
+            placeholder={props.keyPlaceholder}
+          />
+        )}
+        {props.keyHint && <span className="setup-hint">{props.keyHint}</span>}
+      </div>
+    </div>
+  )
+}
+
+/**
  * AI provider setup, shown over a darkened chat until the assistant is
  * connected (and reopenable later from the sidebar gear). Three tabs:
- * the coding agent (any OpenAI-compatible endpoint + model + key, defaults
- * to OpenRouter + Kimi K2.7 Code), optional 2D asset generation (OpenAI
- * gpt-image-1.5) and optional 3D asset generation (Tencent HY 3D).
+ * the models (any OpenAI-compatible endpoints — a main coding model plus the
+ * image-enabled model behind the image-reader and game-tester subagents),
+ * optional 2D asset generation (OpenAI gpt-image-1.5) and optional 3D asset
+ * generation (Tencent HY 3D).
  */
 export function SetupOverlay({ status, onConfigured, onClose }: Props): React.JSX.Element {
   const [tab, setTab] = useState<SetupTab>('agent')
   const [endpoint, setEndpoint] = useState(status.endpoint)
   const [model, setModel] = useState(status.model)
   const [apiKey, setApiKey] = useState('')
+  const [imageEndpoint, setImageEndpoint] = useState(status.imageEndpoint)
+  const [imageModel, setImageModel] = useState(status.imageModel)
+  const [imageApiKey, setImageApiKey] = useState('')
   const [tencentId, setTencentId] = useState('')
   const [tencentKey, setTencentKey] = useState('')
   const [openaiKey, setOpenaiKey] = useState('')
@@ -52,8 +137,14 @@ export function SetupOverlay({ status, onConfigured, onClose }: Props): React.JS
   // field only appears once the user explicitly asks to change it, so
   // opening the panel and hitting Save can never blank out a stored key.
   const [providerKeyRevealed, setProviderKeyRevealed] = useState(!status.configured)
+  const [imageKeyRevealed, setImageKeyRevealed] = useState(!status.imageConfigured)
   const [tencentRevealed, setTencentRevealed] = useState(!status.hy3dConfigured)
   const [openaiKeyRevealed, setOpenaiKeyRevealed] = useState(!status.gptImageConfigured)
+
+  // Matching endpoints share one provider (and one API key) in the OpenCode
+  // config, so the image key is only mandatory for a separate endpoint.
+  const sameEndpoint =
+    (imageEndpoint.trim() || OPENROUTER_ENDPOINT) === (endpoint.trim() || OPENROUTER_ENDPOINT)
 
   // Save applies every tab at once, so a validation error may concern a tab
   // the user isn't looking at — switch to it so the message makes sense.
@@ -69,21 +160,40 @@ export function SetupOverlay({ status, onConfigured, onClose }: Props): React.JS
       fail('An API key is required to connect the assistant.', 'agent')
       return
     }
+    if (!sameEndpoint && !imageApiKey.trim() && !status.imageConfigured) {
+      fail(
+        'The image model uses its own endpoint, so it needs its own API key (or point it at the main endpoint to share the key).',
+        'agent'
+      )
+      return
+    }
     if (!!tencentId.trim() !== !!tencentKey.trim()) {
       fail('Enter both the Tencent SecretId and SecretKey (or leave both blank).', '3d')
       return
     }
     setBusy(true)
     setError(null)
-    const result = await window.api.saveSetup(endpoint, model, apiKey, tencentId, tencentKey, openaiKey)
+    const result = await window.api.saveSetup({
+      endpoint,
+      model,
+      apiKey,
+      imageEndpoint,
+      imageModel,
+      imageApiKey,
+      tencentSecretId: tencentId,
+      tencentSecretKey: tencentKey,
+      openaiApiKey: openaiKey
+    })
     setBusy(false)
     if (!result.ok) {
       setError(result.error)
-    } else if (result.data.configured) {
+    } else if (!result.data.configured) {
+      setError('The main model endpoint still has no usable credential — double-check the API key.')
+    } else if (!result.data.imageConfigured) {
+      setError('The image model endpoint still has no usable credential — double-check its API key.')
+    } else {
       onConfigured(result.data)
       onClose?.()
-    } else {
-      setError('That endpoint still has no usable credential — double-check the API key.')
     }
   }
 
@@ -102,8 +212,8 @@ export function SetupOverlay({ status, onConfigured, onClose }: Props): React.JS
           <div>
             <h2 className="setup-title">{status.configured ? 'AI settings' : 'Connect your AI assistant'}</h2>
             <p className="setup-sub">
-              OpenGenie's assistant is powered by OpenCode. Point it at an API endpoint and paste a
-              key to get started.
+              OpenGenie's assistant is powered by OpenCode: a main coding agent plus
+              image-enabled helpers that read your images and play-test your game.
             </p>
           </div>
         </div>
@@ -125,53 +235,46 @@ export function SetupOverlay({ status, onConfigured, onClose }: Props): React.JS
 
         {tab === 'agent' && (
           <>
-            <label className="setup-field">
-              <span className="setup-label">API endpoint</span>
-              <input
-                className="text-input"
-                value={endpoint}
-                spellCheck={false}
-                autoCapitalize="off"
-                onChange={(e) => setEndpoint(e.target.value)}
-                placeholder="https://openrouter.ai/api/v1"
-              />
-              <span className="setup-hint">Any OpenAI-compatible API endpoint will work.</span>
-            </label>
+            <ModelSection
+              title="Main coding model"
+              hint="Plans and writes your game's code. Any OpenAI-compatible API endpoint will work."
+              endpoint={endpoint}
+              onEndpoint={setEndpoint}
+              model={model}
+              onModel={setModel}
+              modelPlaceholder="z-ai/glm-5.2"
+              apiKey={apiKey}
+              onApiKey={setApiKey}
+              keyPlaceholder={status.configured ? 'Leave blank to keep the stored key' : 'Your API key'}
+              keyHint="Stored locally in OpenCode's credential file — it never leaves your machine or enters your game's code."
+              keyHidden={status.configured && !providerKeyRevealed}
+              keyAutoFocus={status.configured}
+              onRevealKey={() => setProviderKeyRevealed(true)}
+              onSubmit={() => void save()}
+            />
 
-            <label className="setup-field">
-              <span className="setup-label">Model</span>
-              <input
-                className="text-input"
-                value={model}
-                spellCheck={false}
-                autoCapitalize="off"
-                onChange={(e) => setModel(e.target.value)}
-                placeholder="moonshotai/kimi-k2.7-code"
-              />
-            </label>
-
-            <div className="setup-field">
-              <span className="setup-label">API key</span>
-              {status.configured && !providerKeyRevealed ? (
-                <ConfiguredButton onClick={() => setProviderKeyRevealed(true)} />
-              ) : (
-                <input
-                  className="text-input"
-                  type="password"
-                  value={apiKey}
-                  spellCheck={false}
-                  autoComplete="off"
-                  autoFocus={status.configured}
-                  onChange={(e) => setApiKey(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && void save()}
-                  placeholder={status.configured ? 'Leave blank to keep the stored key' : 'Your API key'}
-                />
-              )}
-              <span className="setup-hint">
-                Stored locally in OpenCode's credential file — it never leaves your machine or
-                enters your game's code.
-              </span>
-            </div>
+            <ModelSection
+              title="Image model"
+              hint="Runs the assistant's image helpers — reading images you attach and play-testing your game with screenshots — so it must accept image input."
+              endpoint={imageEndpoint}
+              onEndpoint={setImageEndpoint}
+              model={imageModel}
+              onModel={setImageModel}
+              modelPlaceholder="moonshotai/kimi-k2.7-code"
+              apiKey={imageApiKey}
+              onApiKey={setImageApiKey}
+              keyPlaceholder={
+                sameEndpoint
+                  ? 'Leave blank to use the main API key'
+                  : status.imageConfigured
+                    ? 'Leave blank to keep the stored key'
+                    : 'API key for this endpoint'
+              }
+              keyHidden={status.imageConfigured && !imageKeyRevealed}
+              keyAutoFocus={status.imageConfigured}
+              onRevealKey={() => setImageKeyRevealed(true)}
+              onSubmit={() => void save()}
+            />
           </>
         )}
 

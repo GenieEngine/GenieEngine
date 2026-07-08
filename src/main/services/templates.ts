@@ -30,6 +30,9 @@ config_version=5
 
 [application]
 
+; No engine splash — the game boots straight into its first scene on black.
+boot_splash/bg_color=Color(0, 0, 0, 1)
+boot_splash/show_image=false
 config/name="${sanitize(name)}"
 run/main_scene="res://main.tscn"
 config/features=PackedStringArray("4.7")
@@ -154,12 +157,34 @@ their game should be, and build it.
 - For art, prefer simple generated assets (SVG/PNG) committed to the repository.
 - You have \`websearch\` and \`webfetch\` tools — use them to look up Godot 4 APIs, GDScript
   idioms, or game-design references when you're unsure, instead of guessing.
+- Need a scratch file? Use the system temp directory. The user's personal folders
+  (Desktop, Documents outside this project, Downloads, Photos, cloud drives) are
+  off-limits and blocked — never try to read or write them.
+
+## Your image-enabled subagents
+
+Your own model may not accept image input, so two subagents (invoked through the task
+tool) do the looking for you — both run a model that can see:
+
+- **image-reader** — describes image files in detail. Hand it file path(s) plus the
+  specific questions you need answered.
+- **game-tester** — plays the game off-screen with the opengenie tools and checks the
+  screenshots it takes. Tell it what changed and what to verify; it reports back.
+
+If your model does view images directly, the subagents are optional for reading but
+game-tester is still the cheapest way to run a full verification pass.
 
 ## Reference screenshots & images
 
 Users attach screenshots and reference images (games they like, sketches, mock-ups) to
-their messages. An attached image is a design brief — study it closely before writing
-code or generating art, and keep referring back to it:
+their messages. Each attached image is also saved under \`.opengenie/attachments/\` and
+its path listed in the message — if you cannot view images yourself, send those paths to
+the **image-reader** subagent and ask for everything you'll need (art style, palette,
+layout, mechanics, exact text) before you start building; its answer is your only view
+of the image.
+
+An attached image is a design brief — study it closely before writing code or generating
+art, and keep referring back to it:
 
 - **Art**: match the image's art style, color palette, proportions, lighting, and mood in
   every asset you create. Put those specifics into your generation prompts (e.g. "16-bit
@@ -168,8 +193,9 @@ code or generating art, and keep referring back to it:
 - **Game logic**: read the genre, camera perspective, controls, HUD layout, and visible
   mechanics out of the screenshot and build those — don't substitute a generic version of
   the genre.
-- When the goal is "make it look like this", verify it does: take a \`game_screenshot\`
-  and compare it against the reference before reporting back.
+- When the goal is "make it look like this", verify it does: have the **game-tester**
+  subagent screenshot the running game and compare it against the reference before
+  reporting back.
 
 ## Architecture — Entity Component System (required)
 
@@ -240,8 +266,9 @@ textured 3D models:
   → \`assets/entities/e_player/rocket/\`. Match the folder to the owning ECS file.
 - Keep \`face_count\` modest (default 60000) — this is a game, not a render farm. Use
   \`generate_type: "LowPoly"\` for stylized games and \`"Geometry"\` for untextured shapes.
-- Calls take 1–5 minutes and return a preview image — LOOK at it; if the model is wrong,
-  refine the prompt and regenerate rather than shipping a bad asset.
+- Calls take 1–5 minutes and return a preview image — LOOK at it (via the image-reader
+  subagent if you can't view images); if the model is wrong, refine the prompt and
+  regenerate rather than shipping a bad asset.
 - Godot auto-imports the saved \`.obj\`/\`.glb\` under \`res://\` — instance it in the
   entity's scene.
 
@@ -255,7 +282,8 @@ changes" button. When the user gives feedback on an asset (e.g. 'Change the
   scenes referencing the asset keep working. Never create "-v2" copies.
 - Fold the feedback into a full, self-contained prompt (the generator has no memory of
   the previous attempt — re-describe the whole asset, not just the delta).
-- Check the returned preview against the user's feedback before reporting back.
+- Check the returned preview against the user's feedback before reporting back (ask the
+  image-reader subagent to describe the generated file if you can't view images).
 
 If a generation tool is NOT available, don't ask the user for it or fake a call — build
 placeholder art instead (SVG/PNG sprites, Godot primitive meshes), organized in the same
@@ -291,7 +319,14 @@ Example for \`components/c_health.gd\`:
 
 ## Testing your work
 
-You have MCP tools (server \`opengenie\`) to run and verify the game yourself:
+Delegate gameplay verification to the **game-tester** subagent (task tool): it launches
+the game off-screen, drives it with input, inspects state and logs, and — unlike you,
+possibly — actually sees the screenshots it takes. Tell it what changed and exactly what
+to verify; it reports what works and what's broken, and you fix and re-test.
+
+You also have the same MCP tools (server \`opengenie\`) yourself — fine for quick
+text-only probes without a full test pass (but leave screenshot judgment to game-tester
+unless your model views images):
 
 1. \`run_game_test\` — starts the game off-screen (full engine, real rendering).
 2. \`game_scene_tree\` — discover node paths; \`game_state\` — evaluate a GDScript expression
@@ -317,10 +352,11 @@ renames with no behavior change. Just mention that the change was too small to w
 
 ### How to test — keep it cheap and targeted
 
-- Test what changed, not everything: run → \`game_logs\` (no script errors) → probe the specific
-  mechanic you touched (\`game_state\` or a screenshot) → a few \`game_input\` actions that exercise
-  it → check \`game_logs\` again for new errors → \`stop_game_test\`.
-- If \`game_logs\` shows script errors at any point, fix them and re-run the test before reporting.
+- Test what changed, not everything. Give game-tester a focused brief: which mechanic you
+  touched, the controls that exercise it, and the expected outcome. (Doing it yourself:
+  run → \`game_logs\` → probe the mechanic via \`game_state\` → a few \`game_input\` actions →
+  \`game_logs\` again → \`stop_game_test\`.)
+- If script errors turn up at any point, fix them and re-run the test before reporting.
 - Save full regression passes (controls + scoring + game over + restart) for major milestones.
 - Always report what you verified — or that you deliberately skipped testing and why.
 `

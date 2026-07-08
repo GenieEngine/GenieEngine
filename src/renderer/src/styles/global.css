@@ -1266,7 +1266,11 @@ button:disabled {
 
 .setup-card {
   width: 100%;
-  max-width: 380px;
+  max-width: 400px;
+  /* The Models tab stacks two endpoint/model/key sections — allow the card
+     to scroll instead of overflowing small windows. */
+  max-height: 100%;
+  overflow-y: auto;
   background: var(--bg-elevated);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius);
@@ -1275,6 +1279,21 @@ button:disabled {
   display: flex;
   flex-direction: column;
   gap: 14px;
+}
+
+.setup-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.setup-section-title {
+  display: block;
+  font-size: 12px;
+  font-weight: 700;
+  margin-bottom: 3px;
 }
 
 .setup-head {

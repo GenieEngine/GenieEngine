@@ -1,5 +1,6 @@
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import type { ChatAttachment } from '../../shared/types'
 
 /**
  * Per-project chat persistence, stored inside the game project under
@@ -10,6 +11,8 @@ import { join } from 'node:path'
  *                       it, so a cleared chat stays cleared.
  * - input-history.json  every message the user has sent, for ↑/↓ recall in
  *                       the composer. Intentionally survives /clear.
+ * - attachments/        images the user attached to messages, saved so the
+ *                       AI's image-enabled subagents can open them by path.
  *
  * The transcript is stored as the renderer's own message JSON — the main
  * process treats it as opaque (`unknown[]`) and the renderer validates shape
@@ -19,6 +22,7 @@ import { join } from 'node:path'
 const STATE_DIR = '.opengenie'
 const CHAT_FILE = 'chat.json'
 const INPUT_FILE = 'input-history.json'
+const ATTACH_DIR = 'attachments'
 const MAX_INPUT_ENTRIES = 100
 
 export interface SavedChat {
@@ -98,4 +102,45 @@ export async function appendInputHistory(projectPath: string, entry: string): Pr
 /** /clear: forget the transcript (input history intentionally stays). */
 export async function clearChatHistory(projectPath: string): Promise<void> {
   await rm(join(projectPath, STATE_DIR, CHAT_FILE), { force: true })
+  // Attachments only exist for the conversation that referenced them — a
+  // cleared chat can't reach the old paths, so drop the files with it.
+  await rm(join(projectPath, STATE_DIR, ATTACH_DIR), { recursive: true, force: true })
+}
+
+/**
+ * Writes message attachments into .opengenie/attachments/ and returns their
+ * project-relative paths (POSIX-style, ready for the message text). Saving to
+ * disk is what lets an image reach the image-enabled subagents: they never
+ * see the data URLs riding the chat message — a file path handed through the
+ * task tool plus the `read` tool is their only way in. The main model may not
+ * accept image input at all, so the path can be the image's only usable form.
+ */
+export async function saveChatAttachments(
+  projectPath: string,
+  attachments: ChatAttachment[]
+): Promise<string[]> {
+  if (attachments.length === 0) return []
+  const dir = join(await ensureStateDir(projectPath), ATTACH_DIR)
+  await mkdir(dir, { recursive: true })
+  const stamp = Date.now()
+  const saved: string[] = []
+  for (const [i, attachment] of attachments.entries()) {
+    const comma = attachment.dataUrl.indexOf(',')
+    if (comma === -1) continue
+    // Attachment names come from the user's filesystem — keep a recognizable
+    // slug but drop anything path-hostile; the timestamp prefix de-dupes.
+    const base =
+      attachment.name
+        .replace(/\.[^.]*$/, '')
+        .replace(/[^\w.-]+/g, '_')
+        .slice(0, 40) || 'image'
+    const ext =
+      attachment.name.match(/\.([A-Za-z0-9]+)$/)?.[1] ??
+      attachment.mime.split('/')[1]?.split('+')[0] ??
+      'png'
+    const file = `${stamp}-${i}-${base}.${ext}`
+    await writeFile(join(dir, file), Buffer.from(attachment.dataUrl.slice(comma + 1), 'base64'))
+    saved.push(`${STATE_DIR}/${ATTACH_DIR}/${file}`)
+  }
+  return saved
 }

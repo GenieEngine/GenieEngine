@@ -1,5 +1,5 @@
 import { dialog, ipcMain } from 'electron'
-import type { ChatAttachment, GameInputEvent, GitChange, InitialState, ProjectInfo, Result, StageRect } from '../shared/types'
+import type { ChatAttachment, GameInputEvent, GitChange, InitialState, ProjectInfo, Result, SetupRequest, StageRect } from '../shared/types'
 import { normalizeGodotPath, resolveGodot, resolveOpencode } from './services/binaries'
 import { scanEcs } from './services/ecs'
 import * as files from './services/files'
@@ -164,20 +164,10 @@ export function registerIpcHandlers(): void {
   handle('chat:answerQuestion', (requestID: string, answers: string[][]) => answerQuestion(requestID, answers))
   handle('chat:rejectQuestion', (requestID: string) => rejectQuestion(requestID))
   handle('chat:setupStatus', () => getSetupStatus())
-  handle(
-    'chat:saveSetup',
-    async (
-      endpoint: string,
-      model: string,
-      apiKey: string,
-      tencentSecretId?: string,
-      tencentSecretKey?: string,
-      openaiApiKey?: string
-    ) => {
-      await saveSetup(endpoint, model, apiKey, tencentSecretId, tencentSecretKey, openaiApiKey)
-      return getSetupStatus()
-    }
-  )
+  handle('chat:saveSetup', async (request: SetupRequest) => {
+    await saveSetup(request)
+    return getSetupStatus()
+  })
 
   // ---- Export ----------------------------------------------------------------
   handle('export:run', (name: string, platforms: ExportPlatform[]) =>
