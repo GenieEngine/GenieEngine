@@ -314,6 +314,8 @@ export interface OpenGenieApi {
   onGameCursor(cb: (shape: number) => void): () => void
   /** PNG data URL each time the AI captures a screenshot during a test run. */
   onGameTestShot(cb: (dataUrl: string) => void): () => void
+  /** Measured game frame rate, ~1 update/second while a game runs. */
+  onGameFps(cb: (fps: number) => void): () => void
 
   // AI chat (OpenCode)
   chatSend(message: string, attachments?: ChatAttachment[]): Promise<Result<null>>

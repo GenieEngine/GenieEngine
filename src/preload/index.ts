@@ -35,6 +35,7 @@ const api: OpenGenieApi = {
   onGameState: (cb) => subscribe('game:state', cb),
   onGameCursor: (cb) => subscribe('game:cursor', cb),
   onGameTestShot: (cb) => subscribe('game:test-shot', cb),
+  onGameFps: (cb) => subscribe('game:fps', cb),
 
   chatSend: (message, attachments) => invoke('chat:send', message, attachments),
   chatCancel: () => invoke('chat:cancel'),

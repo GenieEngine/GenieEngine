@@ -104,7 +104,7 @@ export function gitignore(): string {
 .godot/
 .DS_Store
 
-# OpenGenie AI test-run helpers (auto-generated at test start, removed on stop)
+# OpenGenie run helpers (auto-generated while the game runs, removed on stop)
 override.cfg
 opengenie_test_agent.gd
 
@@ -361,5 +361,19 @@ renames with no behavior change. Just mention that the change was too small to w
 - If script errors turn up at any point, fix them and re-run the test before reporting.
 - Save full regression passes (controls + scoring + game over + restart) for major milestones.
 - Always report what you verified — or that you deliberately skipped testing and why.
+
+### Performance — \`.opengenie/perf.log\`
+
+While the game runs (the user playing OR a test run), OpenGenie measures every frame and
+logs frame-rate stats per 60-second window: \`avg\`, \`min\`, \`max\`, \`1%low\`, \`0.1%low\`
+(all in FPS; the lows are the FPS equivalent of the average frame time of the slowest 1% /
+0.1% of frames — the standard stutter metrics). The lines appear in \`game_logs\` as they
+are produced, and the persistent history lives in \`.opengenie/perf.log\`.
+
+When the user reports lag, stutter, or slowness: read \`.opengenie/perf.log\` FIRST — it
+holds real measurements from their own play sessions. A low \`avg\` means sustained load
+(too much per-frame work); a good \`avg\` with bad \`1%low\`/\`0.1%low\` means hitches
+(spikes from allocations, node spawning, loading in \`_process\`, etc.). After optimizing,
+run the game again and compare new windows against the old ones.
 `
 }

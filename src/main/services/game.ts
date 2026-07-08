@@ -12,6 +12,7 @@ import {
   encodeMouseButtonEvent,
   encodeMouseMotionEvent
 } from './godot-input-codec'
+import { addPerfFrames, appendPerfLog, drainPerfWindow, formatPerfStats, resetPerfWindow, type PerfStats } from './perf-monitor'
 import { cleanupTestAgent, injectTestAgent } from './test-agent'
 
 /**
@@ -32,8 +33,11 @@ let embedSession: EmbedSession | null = null
 let layerAttached = false
 let stageRect: StageRect | null = null
 
+// The project that currently has the agent (test-agent.ts) injected — set for
+// every embedded run (play and test), cleaned up on stop. Also where perf.log goes.
+let injectedProjectPath: string | null = null
+
 // AI test-run state
-let testProjectPath: string | null = null
 let testCommandCounter = 0
 const pendingTestReplies = new Map<
   number,
@@ -81,6 +85,25 @@ function pipeLines(stream: NodeJS.ReadableStream | null): void {
     lines.forEach(emitLog)
   })
   stream.on('end', () => emitLog(buffer))
+}
+
+/**
+ * Record a completed 60s frame-rate window: into the game console/log buffer
+ * (so the AI's game_logs tool sees it) and the project's .opengenie/perf.log
+ * (persistent history for diagnosing performance across runs).
+ */
+function logPerfStats(stats: PerfStats): void {
+  emitLog(`[opengenie] fps ${formatPerfStats(stats)} — history in .opengenie/perf.log`)
+  if (injectedProjectPath) {
+    void appendPerfLog(injectedProjectPath, state.mode ?? 'native', stats)
+  }
+}
+
+/** Frame-delta batch (~1/s) from the injected agent — see perf-monitor.ts. */
+function handlePerfFrames(deltas: number[]): void {
+  const { fps, completed } = addPerfFrames(deltas)
+  if (fps !== null) sendToRenderer('game:fps', fps)
+  if (completed) logPerfStats(completed)
 }
 
 function godotMissingError(): Error {
@@ -271,9 +294,11 @@ async function playNativeEmbedded(godot: string, projectPath: string, visible: b
         pendingTestReplies.delete(id)
         pending.resolve({ ok, text })
       }
-    }
+    },
+    onPerfFrames: handlePerfFrames
   })
 
+  resetPerfWindow()
   const port = await session.listen()
   embedSession = session
 
@@ -316,6 +341,12 @@ export async function playGame(projectPath: string): Promise<void> {
 
   setState({ status: 'starting' })
   try {
+    // The agent also runs during user play — it supplies the frame timings
+    // behind the FPS counter and .opengenie/perf.log (probe commands stay
+    // test-only: runTestCommand refuses outside test mode).
+    await cleanupTestAgent(projectPath) // stale files from a crashed run
+    await injectTestAgent(projectPath)
+    injectedProjectPath = projectPath
     await playNativeEmbedded(godot, projectPath, true)
   } catch (err) {
     stopGame()
@@ -324,6 +355,10 @@ export async function playGame(projectPath: string): Promise<void> {
 }
 
 export function stopGame(): void {
+  // Flush the in-progress stats window first (needs mode + project path, both
+  // still set here); short leftovers are dropped inside drainPerfWindow.
+  const finalStats = drainPerfWindow()
+  if (finalStats) logPerfStats(finalStats)
   if (nativeProcess) {
     // Ask the game to close cleanly (saves etc.); force-kill if it lingers.
     const proc = nativeProcess
@@ -344,9 +379,9 @@ export function stopGame(): void {
     pending.resolve({ ok: false, text: 'game stopped' })
   }
   pendingTestReplies.clear()
-  if (testProjectPath) {
-    void cleanupTestAgent(testProjectPath)
-    testProjectPath = null
+  if (injectedProjectPath) {
+    void cleanupTestAgent(injectedProjectPath)
+    injectedProjectPath = null
   }
   if (state.status !== 'stopped') setState({ status: 'stopped' })
 }
@@ -368,7 +403,7 @@ export async function startGameTest(projectPath: string): Promise<void> {
   try {
     await cleanupTestAgent(projectPath) // stale files from a crashed run
     await injectTestAgent(projectPath)
-    testProjectPath = projectPath
+    injectedProjectPath = projectPath
     await playNativeEmbedded(godot, projectPath, false)
     // Wait until the handshake completes (state flips to running) so tools
     // called right after run_game_test find a live session. Read via the

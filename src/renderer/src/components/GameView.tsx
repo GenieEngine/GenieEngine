@@ -162,6 +162,13 @@ export function GameView({
     if (state.status !== 'running' || state.mode !== 'test') setTestShot(null)
   }, [state])
 
+  // Frame rate measured inside the game process (~1 update/s while running).
+  const [fps, setFps] = useState<number | null>(null)
+  useEffect(() => window.api.onGameFps(setFps), [])
+  useEffect(() => {
+    if (state.status !== 'running') setFps(null)
+  }, [state])
+
   // Keep the main process aware of where the game should render. With an
   // enforced aspect ratio the game frame is the largest centered rect of that
   // shape inside the stage — the stage's black background forms the bars.
@@ -273,8 +280,23 @@ export function GameView({
 
   const embedded = state.status === 'running'
 
+  // The FPS readout lives in a strip ABOVE the stage: the native game layer
+  // is composited over the web contents, so DOM drawn inside the stage rect
+  // would be invisible behind the running game.
+  const showFpsBar = embedded && state.mode === 'native'
+
   return (
     <section className="game-area" ref={areaRef}>
+      {showFpsBar && (
+        <div className="stage-toolbar">
+          <span
+            className={`fps-badge${fps !== null && fps < 30 ? ' bad' : fps !== null && fps < 50 ? ' warn' : ''}`}
+            title="Frame rate measured in the game process. Per-minute stats (min/max/avg/1% low/0.1% low) are logged to .opengenie/perf.log"
+          >
+            {fps !== null ? `${Math.round(fps)} FPS` : '— FPS'}
+          </span>
+        </div>
+      )}
       <div ref={stageRef} className={embedded ? 'game-stage embedded' : 'game-stage'}>
         {error && (
           <div className="error-banner">

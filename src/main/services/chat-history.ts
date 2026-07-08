@@ -16,6 +16,9 @@ import type { ChatAttachment } from '../../shared/types'
  * - test-shots/         screenshots the AI takes of the running game (written
  *                       by test-harness.ts) — in-project so agents can read
  *                       them without leaving the project directory.
+ * - perf.log            frame-rate stats, one line per minute of gameplay
+ *                       (written by perf-monitor.ts) — the AI reads it to
+ *                       diagnose performance issues.
  *
  * The transcript is stored as the renderer's own message JSON — the main
  * process treats it as opaque (`unknown[]`) and the renderer validates shape

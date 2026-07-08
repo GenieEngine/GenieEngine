@@ -159,7 +159,8 @@ const TOOLS = [
   },
   {
     name: 'game_logs',
-    description: 'Get the game\'s recent console output (prints and script errors) and current run status.',
+    description:
+      'Get the game\'s recent console output (prints and script errors) and current run status. Includes "[opengenie] fps" lines with frame-rate stats (avg/min/max/1% low/0.1% low per 60s window). The full frame-rate history across runs — including the user\'s own play sessions — persists in .opengenie/perf.log; read that file when diagnosing performance problems.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false }
   },
   {
