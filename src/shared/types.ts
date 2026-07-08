@@ -184,6 +184,8 @@ export interface ChatPartUpdate {
     title?: string
     /** Failure reason when status is 'error' — tooltip on the chip. */
     error?: string
+    /** Set when a subagent (game-tester, image-reader) ran this tool — the chip is labelled with it. */
+    agent?: string
   }
 }
 

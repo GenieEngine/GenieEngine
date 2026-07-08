@@ -358,6 +358,9 @@ renames with no behavior change. Just mention that the change was too small to w
   touched, the controls that exercise it, and the expected outcome. (Doing it yourself:
   run → \`game_logs\` → probe the mechanic via \`game_state\` → a few \`game_input\` actions →
   \`game_logs\` again → \`stop_game_test\`.)
+- Each test run has a hard budget (~40 game tool calls / 8 minutes) before the tools shut
+  off — an open-ended brief like "verify everything" will burn it before concluding. Ask
+  for a handful of specific checks; split genuinely broad verification into separate runs.
 - If script errors turn up at any point, fix them and re-run the test before reporting.
 - Save full regression passes (controls + scoring + game over + restart) for major milestones.
 - Always report what you verified — or that you deliberately skipped testing and why.

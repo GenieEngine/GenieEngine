@@ -44,6 +44,52 @@ const pendingTestReplies = new Map<
   { resolve: (r: { ok: boolean; text: string }) => void; timer: ReturnType<typeof setTimeout> }
 >()
 
+/**
+ * Budget for one AI test run. Without a cap, open-ended test briefs ran
+ * 50-70 agent-loop steps (12+ minutes): the model kept probing instead of
+ * concluding, every step re-sent the whole screenshot-laden conversation,
+ * and the provider started failing (413/500) — the user saw a frozen chat
+ * and cancelled. Healthy focused runs finish in well under 20 tool calls,
+ * so the cap only trips runaway sessions. Enforced in the harness
+ * (test-harness.ts) because a prompt-only budget is routinely ignored.
+ * Starting a new run_game_test resets the budget — deliberate: a fresh run
+ * restarts the game, so it can't be farmed to extend one endless session.
+ */
+const TEST_BUDGET = { calls: 40, ms: 8 * 60_000, warnCalls: 30, warnMs: 6 * 60_000 }
+let testToolCalls = 0
+let testRunStart = 0
+
+/**
+ * Count one game tool call against the current test run's budget and report
+ * where it stands. `notice` (when set) must reach the model: it is either the
+ * wrap-up warning appended to a successful result or the exhausted message
+ * that replaces the tool result entirely.
+ */
+export function consumeTestBudget(): { exhausted: boolean; notice?: string } {
+  if (state.mode !== 'test' || state.status !== 'running') return { exhausted: false }
+  testToolCalls++
+  const elapsedMs = Date.now() - testRunStart
+  const minutes = Math.round(elapsedMs / 60_000)
+  if (testToolCalls > TEST_BUDGET.calls || elapsedMs > TEST_BUDGET.ms) {
+    return {
+      exhausted: true,
+      notice:
+        `Test budget exhausted (${TEST_BUDGET.calls} game tool calls / ${TEST_BUDGET.ms / 60_000} minutes per run) — ` +
+        'stop probing now. Call stop_game_test, then write your report from the evidence you already have. ' +
+        'game_logs still works if you need the final console output.'
+    }
+  }
+  if (testToolCalls > TEST_BUDGET.warnCalls || elapsedMs > TEST_BUDGET.warnMs) {
+    return {
+      exhausted: false,
+      notice:
+        `[test budget: ${testToolCalls}/${TEST_BUDGET.calls} tool calls, ~${minutes}/${TEST_BUDGET.ms / 60_000} minutes] ` +
+        'Wrap up: verify anything essential with the fewest remaining probes, then stop_game_test and report.'
+    }
+  }
+  return { exhausted: false }
+}
+
 function setState(next: GameState): void {
   state = next
   sendToRenderer('game:state', state)
@@ -399,6 +445,8 @@ export async function startGameTest(projectPath: string): Promise<void> {
   if (!godot) throw godotMissingError()
 
   logBuffer.length = 0
+  testToolCalls = 0
+  testRunStart = Date.now()
   setState({ status: 'starting', mode: 'test' })
   try {
     await cleanupTestAgent(projectPath) // stale files from a crashed run

@@ -1655,6 +1655,10 @@ button:disabled {
 .tool-chip.error .tool-chip-status {
   color: var(--red);
 }
+/* Delegated work: chips relayed from a subagent session (game-tester etc.). */
+.tool-chip.subagent {
+  border-style: dashed;
+}
 
 .tool-chip-icon {
   display: inline-flex;

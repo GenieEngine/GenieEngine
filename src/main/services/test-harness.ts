@@ -1,4 +1,4 @@
-import { app } from 'electron'
+import { app, nativeImage } from 'electron'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { readdir, readFile, rm } from 'node:fs/promises'
@@ -8,6 +8,7 @@ import { ensureProjectStateDir } from './chat-history'
 import { getCurrentProject } from '../state'
 import { sendToRenderer } from '../window'
 import {
+  consumeTestBudget,
   getGameLogs,
   getGameState,
   runTestCommand,
@@ -77,6 +78,30 @@ interface ToolResult {
   imageMime?: string
 }
 
+/** Longest edge / quality of the screenshot variant sent to the model. */
+const SHOT_MAX_WIDTH = 1024
+const SHOT_JPEG_QUALITY = 72
+
+/**
+ * Shrink a screenshot for the model: retina-scale PNGs (~0.5-0.7 MB each)
+ * accumulate as base64 in the test agent's conversation and are re-sent on
+ * every step — measured runs slowed from ~4s to ~27s per step and eventually
+ * drew 413/500 responses from the model provider. A 1024-wide JPEG (~10x
+ * smaller) is plenty to judge layout, art, and HUD text. The full-resolution
+ * PNG stays on disk for the user and the image-reader subagent.
+ */
+function shrinkShotForModel(png: Buffer): { base64: string; mime: string } {
+  try {
+    let img = nativeImage.createFromBuffer(png)
+    if (img.isEmpty()) throw new Error('unreadable screenshot')
+    if (img.getSize().width > SHOT_MAX_WIDTH) img = img.resize({ width: SHOT_MAX_WIDTH })
+    return { base64: img.toJPEG(SHOT_JPEG_QUALITY).toString('base64'), mime: 'image/jpeg' }
+  } catch {
+    // Conversion failed — better to send the big original than no image.
+    return { base64: png.toString('base64'), mime: 'image/png' }
+  }
+}
+
 /** Drop a generated-asset preview into the chat (ChatPanel renders it with a feedback button). */
 function pushAssetPreview(base64: string, mime: string, label: string, files: string[], kind: AssetPreview['kind']): void {
   const preview: AssetPreview = {
@@ -89,7 +114,21 @@ function pushAssetPreview(base64: string, mime: string, label: string, files: st
   sendToRenderer('chat:asset-preview', preview)
 }
 
+/** The per-run budget applies to these (each one costs a model round trip). */
+const BUDGETED_TOOLS = new Set(['game_input', 'game_state', 'game_scene_tree', 'game_screenshot', 'game_logs'])
+
 async function runTool(name: string, args: Record<string, unknown>): Promise<ToolResult> {
+  if (!BUDGETED_TOOLS.has(name)) return dispatchTool(name, args)
+  // See consumeTestBudget (game.ts) for why runaway test runs must be capped.
+  // game_logs stays usable past exhaustion so the final report can quote logs.
+  const budget = consumeTestBudget()
+  if (budget.exhausted && name !== 'game_logs') return { ok: false, text: budget.notice! }
+  const result = await dispatchTool(name, args)
+  if (budget.notice && result.ok) result.text = `${result.text}\n\n${budget.notice}`
+  return result
+}
+
+async function dispatchTool(name: string, args: Record<string, unknown>): Promise<ToolResult> {
   switch (name) {
     case 'run_game_test': {
       const project = getCurrentProject()
@@ -117,9 +156,9 @@ async function runTool(name: string, args: Record<string, unknown>): Promise<Too
       const reply = await runTestCommand('screenshot', [join(dir, file)], 15000)
       if (!reply.ok) return { ok: false, text: reply.text }
       const png = await readFile(join(dir, file))
-      const base64 = png.toString('base64')
+      const shot = shrinkShotForModel(png)
       // Mirror what the AI sees into the UI (chat + game-view test monitor).
-      sendToRenderer('game:test-shot', `data:image/png;base64,${base64}`)
+      sendToRenderer('game:test-shot', `data:${shot.mime};base64,${shot.base64}`)
       void pruneShots(dir)
       // Relative path only: an absolute path outside the project sent agents
       // on denied out-of-project reads (the incident this tool text prevents).
@@ -129,7 +168,8 @@ async function runTool(name: string, args: Record<string, unknown>): Promise<Too
           `Screenshot saved inside the project at .opengenie/test-shots/${file}. ` +
           'If you cannot view the attached image yourself, pass that path to the ' +
           'image-reader subagent — it reads it directly; never copy screenshots elsewhere.',
-        imageBase64: base64
+        imageBase64: shot.base64,
+        imageMime: shot.mime
       }
     }
     case 'game_state': {

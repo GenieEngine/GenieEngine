@@ -42,8 +42,8 @@ const CUSTOM_PROVIDER = 'custom'
 /** Provider id for the image model when it uses its own non-OpenRouter endpoint. */
 const IMAGE_PROVIDER = 'image'
 
-const IMAGE_READER_AGENT = 'image-reader'
-const GAME_TESTER_AGENT = 'game-tester'
+export const IMAGE_READER_AGENT = 'image-reader'
+export const GAME_TESTER_AGENT = 'game-tester'
 
 function configPath(): string {
   return join(homedir(), '.config', 'opencode', 'opencode.json')
@@ -190,6 +190,13 @@ export function applyAgentConfig(config: Record<string, unknown>, imageModelRef:
       "Focus on what the caller asked you to verify, but always report launch errors. Read " +
       'the project source when you need to know which keys, nodes, or mechanics to ' +
       'exercise.\n\n' +
+      'Budget: each run allows ~40 game tool calls / 8 minutes, and every screenshot makes ' +
+      'later steps slower — a good test pass finishes in 10-20 tool calls with 2-4 ' +
+      'screenshots. Be decisive: check each behavior once (twice at most for something ' +
+      'flaky), and the moment a tool result shows a budget warning, stop probing, call ' +
+      'stop_game_test, and write your report from the evidence you have. A finding you ' +
+      'cannot fully pin down still belongs in the report — describe what you observed; ' +
+      'do not keep re-testing it.\n\n' +
       'Report format: a one-line verdict first (works / broken), then evidence per checked ' +
       'item — the state values you probed, what the screenshots show, and any log errors ' +
       'verbatim. Give concrete reproduction steps for every failure. Do not speculate about ' +

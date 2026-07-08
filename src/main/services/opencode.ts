@@ -8,6 +8,9 @@ import { dirname, join, sep } from 'node:path'
 import { sendToRenderer } from '../window'
 import { resolveOpencode } from './binaries'
 import { saveChatAttachments } from './chat-history'
+// Benign import cycle (opencode-setup imports shutdownChat): both sides only
+// use the other's exports at call time, never during module evaluation.
+import { GAME_TESTER_AGENT, IMAGE_READER_AGENT } from './opencode-setup'
 import { getHarnessEndpoint } from './test-harness'
 import type { ChatAttachment, ChatPartUpdate, ChatToolStatus } from '../../shared/types'
 
@@ -39,8 +42,12 @@ let sessionRestored = false
 let busy = false
 let cancelled = false
 let filesChangedTimer: ReturnType<typeof setTimeout> | null = null
-/** Roles by messageID — parts carry no role, so user echoes must be filtered. */
-const messageRoles = new Map<string, string>()
+/**
+ * Message metadata by messageID (parts carry neither field themselves): role
+ * filters the user's echoed message out of the stream, agent tells a subagent
+ * session's parts apart so delegated work can be shown labelled in the chat.
+ */
+const messageMeta = new Map<string, { role: string; agent?: string }>()
 /**
  * Accumulated text of streaming parts in the current turn, by partID.
  * message.part.updated only snapshots a part (empty on creation, full on
@@ -103,6 +110,7 @@ function translatePart(part: any): ChatPartUpdate | null {
       input.filePath ||
       input.pattern ||
       input.description ||
+      input.expression ||
       (typeof input.command === 'string' ? input.command : '') ||
       ''
     return {
@@ -223,15 +231,29 @@ function handleEvent(evt: any): void {
   } else if (/^question\.(v2\.)?(replied|rejected)$/.test(evt?.type) && props.requestID) {
     sendToRenderer('chat:question-done', props.requestID)
   } else if (evt?.type === 'message.updated' && props.info?.id) {
-    messageRoles.set(props.info.id, props.info.role)
+    messageMeta.set(props.info.id, { role: props.info.role, agent: props.info.agent })
   } else if (evt?.type === 'message.part.updated') {
-    if (!sessionID || props.sessionID !== sessionID || !props.part) return
-    // The user's own message echoes back as a text part — skip it.
-    if (messageRoles.get(props.part.messageID) === 'user') return
-    const update = translatePart(props.part)
-    if (update) {
-      if (update.kind === 'text' || update.kind === 'reasoning') partCache.set(update.partID, update)
-      sendToRenderer('chat:part', update)
+    if (!sessionID || !props.part) return
+    if (props.sessionID === sessionID) {
+      // The user's own message echoes back as a text part — skip it.
+      if (messageMeta.get(props.part.messageID)?.role === 'user') return
+      const update = translatePart(props.part)
+      if (update) {
+        if (update.kind === 'text' || update.kind === 'reasoning') partCache.set(update.partID, update)
+        sendToRenderer('chat:part', update)
+      }
+    } else {
+      // Subagent sessions (task-tool children) used to stream nothing: the
+      // game-tester would probe for 10+ minutes behind a perfectly still
+      // chat, and users read the silence as a hang and cancelled the turn.
+      // Relay their tool calls — labelled, tools only; their text/reasoning
+      // belongs to the subagent's own report, not the main transcript.
+      const agent = messageMeta.get(props.part.messageID)?.agent
+      if (agent !== GAME_TESTER_AGENT && agent !== IMAGE_READER_AGENT) return
+      const update = translatePart(props.part)
+      if (update?.kind === 'tool' && update.tool) {
+        sendToRenderer('chat:part', { ...update, tool: { ...update.tool, agent } })
+      }
     }
   } else if (evt?.type === 'message.part.delta') {
     if (!sessionID || props.sessionID !== sessionID || props.field !== 'text') return
@@ -679,7 +701,7 @@ export function shutdownChat(): void {
   sessionID = null
   sessionRestored = false
   busy = false
-  messageRoles.clear()
+  messageMeta.clear()
   partCache.clear()
   killServer()
 }

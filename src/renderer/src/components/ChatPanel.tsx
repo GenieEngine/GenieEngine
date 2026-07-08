@@ -22,7 +22,7 @@ interface AssistantPart {
   id: string
   kind: 'text' | 'reasoning' | 'tool' | 'image' | 'asset'
   text: string
-  tool?: { name: string; status: ChatToolStatus; title?: string; error?: string }
+  tool?: { name: string; status: ChatToolStatus; title?: string; error?: string; agent?: string }
   dataUrl?: string
   /** For kind 'asset': the generated 2D/3D asset preview the user can react to. */
   asset?: AssetPreview
@@ -159,14 +159,16 @@ function toolIcon(name: string): React.JSX.Element {
 }
 
 /** Compact label for a tool chip: the tool name plus a shortened target. */
-function toolLabel(tool: { name: string; title?: string }): string {
+function toolLabel(tool: { name: string; title?: string; agent?: string }): string {
   let title = tool.title ?? ''
   if (title.includes('/')) {
     title = title.split('/').filter(Boolean).slice(-2).join('/')
   }
   if (title.length > 40) title = title.slice(0, 39) + '…'
   const name = tool.name.replace(/^opengenie_/, '')
-  return title ? `${name} · ${title}` : name
+  const label = title ? `${name} · ${title}` : name
+  // Subagent calls carry their agent so delegated work reads as such.
+  return tool.agent ? `${tool.agent} → ${label}` : label
 }
 
 /**
@@ -188,7 +190,7 @@ function ToolChip({ part }: { part: AssistantPart }): React.JSX.Element {
   // Failed calls explain themselves on hover (native tooltip).
   const tooltip = status === 'error' ? `Failed: ${part.tool?.error || 'no error details reported'}` : undefined
   return (
-    <span className={`tool-chip ${status}`} title={tooltip}>
+    <span className={`tool-chip ${status}${part.tool?.agent ? ' subagent' : ''}`} title={tooltip}>
       <span className="tool-chip-icon">{toolIcon(part.tool?.name ?? '')}</span>
       <span className="tool-chip-label">{toolLabel(part.tool ?? { name: 'tool' })}</span>
       <span className="tool-chip-status">

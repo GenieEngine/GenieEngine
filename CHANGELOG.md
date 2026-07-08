@@ -2,6 +2,12 @@
 
 All notable changes to OpenGenie are documented here.
 
+## [Unreleased]
+
+### Fixed
+- The game-testing subagent could probe a game for 10+ minutes behind a motionless chat, looking hung until the user cancelled. AI test runs now have a per-run budget (~40 game tool calls / 8 minutes) with an early wrap-up warning, and subagent tool activity is shown live in the chat as labelled chips
+- Test screenshots are now downscaled to 1024-wide JPEGs before being sent to the model — full-size retina PNGs accumulating in the test conversation made every step slower and could exceed the provider's request-size limit mid-run (the on-disk copy stays full resolution)
+
 ## [0.1.0] - 2026-07-06
 
 ### Added
