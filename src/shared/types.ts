@@ -373,6 +373,14 @@ export interface OpenGenieApi {
    */
   pathForFile(file: File): string
   chatCancel(): Promise<Result<null>>
+  /**
+   * /undo: revert the conversation one user turn (OpenCode restores the files
+   * that turn touched). `revertedTo` is the OpenCode id of the undone user
+   * message — the renderer drops its transcript from the matching turn on.
+   */
+  chatUndo(): Promise<Result<{ revertedTo: string }>>
+  /** /redo: step the revert point forward again (files and conversation). */
+  chatRedo(): Promise<Result<null>>
   /** /clear: fresh conversation AND deletes the project's saved transcript. */
   chatNewSession(): Promise<Result<null>>
   /** Saved transcript + input history for a project; also resumes its AI session. */

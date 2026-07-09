@@ -49,6 +49,8 @@ const api: OpenGenieApi = {
     }
   },
   chatCancel: () => invoke('chat:cancel'),
+  chatUndo: () => invoke('chat:undo'),
+  chatRedo: () => invoke('chat:redo'),
   chatNewSession: () => invoke('chat:new'),
   chatLoadState: (projectPath) => invoke('chat:loadState', projectPath),
   chatSaveHistory: (projectPath, messages) => invoke('chat:saveHistory', projectPath, messages),

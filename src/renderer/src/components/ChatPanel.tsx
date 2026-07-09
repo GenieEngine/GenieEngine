@@ -174,7 +174,11 @@ interface SlashCommand {
   description: string
 }
 
-const SLASH_COMMANDS: SlashCommand[] = [{ name: 'clear', description: 'Clear the chat history' }]
+const SLASH_COMMANDS: SlashCommand[] = [
+  { name: 'clear', description: 'Clear the chat history' },
+  { name: 'undo', description: 'Undo your last message and the file changes it made' },
+  { name: 'redo', description: 'Restore the last undone message' }
+]
 
 /**
  * The text qualifies as a slash-command query only while it looks like one:
@@ -489,11 +493,23 @@ export function ChatPanel({ projectPath, opencodeAvailable, onAssistantDone }: P
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const onDoneRef = useRef(onAssistantDone)
   onDoneRef.current = onAssistantDone
+  // Live mirror of `messages` for handlers that read it after an await —
+  // /undo may abort a streaming turn first, and the resulting "Stopped."
+  // notice must be part of what gets sliced away.
+  const messagesRef = useRef<ChatMessage[]>(messages)
+  messagesRef.current = messages
+  // Turns removed by /undo, newest last; /redo pops and re-appends. Renderer
+  // state is the only copy — the saved transcript is overwritten on undo — so
+  // redo reaches exactly as far back as the undos of this app run. Cleared
+  // whenever the conversation moves on (send, /clear, project switch), which
+  // mirrors OpenCode dropping its revert point on the next message.
+  const redoStackRef = useRef<ChatMessage[][]>([])
 
   // Restore this project's transcript and recall history when it opens (the
   // main process also resumes the saved AI session so context carries over).
   useEffect(() => {
     let alive = true
+    redoStackRef.current = [] // undone turns belong to the previous project's chat
     void window.api.chatLoadState(projectPath).then((result) => {
       if (!alive) return
       if (result.ok) {
@@ -745,6 +761,9 @@ export function ChatPanel({ projectPath, opencodeAvailable, onAssistantDone }: P
     setInput('')
     setAttachments([])
     setAttachError(null)
+    // Moving the conversation forward makes any pending undo permanent
+    // (OpenCode trims the reverted messages on the next prompt).
+    redoStackRef.current = []
     setMessages((msgs) => [
       ...msgs,
       { id: crypto.randomUUID(), role: 'user', content: message, attachments: outgoing }
@@ -757,6 +776,25 @@ export function ChatPanel({ projectPath, opencodeAvailable, onAssistantDone }: P
     }
   }
 
+  /** Notice bubble for a command that couldn't run (nothing to undo, …). */
+  const appendNotice = (content: string): void =>
+    setMessages((msgs) => [...msgs, { id: crypto.randomUUID(), role: 'error', content }])
+
+  /**
+   * Persist a transcript rewritten by /undo//redo right away, bypassing the
+   * debounced effect: it skips empty arrays (mount protection), but undoing
+   * back to an empty chat must still overwrite the saved file or the undone
+   * turn would resurrect on the next open.
+   */
+  const commitRewrite = (next: ChatMessage[]): void => {
+    cancelPendingSave()
+    lastSavedRef.current = next
+    setMessages(next)
+    void window.api.chatSaveHistory(projectPath, stripEphemeral(next))
+    // The revert touched project files under the open views — refresh them.
+    onDoneRef.current()
+  }
+
   const runCommand = async (command: SlashCommand): Promise<void> => {
     setInput('')
     setSlashIndex(0)
@@ -766,12 +804,58 @@ export function ChatPanel({ projectPath, opencodeAvailable, onAssistantDone }: P
       // Also deletes the saved transcript (input history survives — ↑ still
       // recalls messages sent before the clear).
       await window.api.chatNewSession()
+      redoStackRef.current = []
       setMessages([])
       setStreaming(false)
       setQuestion(null)
       setInterrupted(false)
       setHistoryPos(null)
       draftRef.current = ''
+    }
+    if (command.name === 'undo') {
+      // The main process aborts a still-streaming turn first (native /undo
+      // behavior), reverts the OpenCode session one user turn, and restores
+      // the project files that turn changed.
+      const result = await window.api.chatUndo()
+      if (!result.ok) {
+        appendNotice(result.error)
+        return
+      }
+      // Drop the undone turn from the transcript. Assistant message ids are
+      // OpenCode message ids (time-ordered strings, unlike the local uuids on
+      // user bubbles), so the first assistant message newer than the
+      // reverted-to id marks the undone turn; the user bubble before it opens
+      // that turn. No such assistant message (the turn died before producing
+      // one, or a trailing send never reached the session) → the last user
+      // bubble is the one being undone. Slicing to the turn's start also
+      // sweeps the turn's error/"Stopped." notices.
+      const current = messagesRef.current
+      let cut = current.findIndex((m) => m.role === 'assistant' && m.id > result.data.revertedTo)
+      if (cut === -1) cut = current.length
+      let start = cut - 1
+      while (start >= 0 && current[start].role !== 'user') start--
+      if (start < 0) return // no matching turn on screen — leave the transcript alone
+      const removed = current.slice(start)
+      redoStackRef.current.push(removed)
+      commitRewrite(current.slice(0, start))
+      // The undone message returns to the (just-cleared) composer for editing.
+      const undone = removed.find((m) => m.role === 'user')
+      if (undone?.content) setInput(undone.content)
+    }
+    if (command.name === 'redo') {
+      if (redoStackRef.current.length === 0) {
+        appendNotice('Nothing to redo.')
+        return
+      }
+      const result = await window.api.chatRedo()
+      if (!result.ok) {
+        appendNotice(result.error)
+        return
+      }
+      // Steps forward in the same order the undos stepped back (LIFO), the
+      // same way the session's revert point just moved server-side.
+      const restored = redoStackRef.current.pop()!
+      commitRewrite([...messagesRef.current, ...restored])
     }
   }
 
@@ -840,8 +924,8 @@ export function ChatPanel({ projectPath, opencodeAvailable, onAssistantDone }: P
               ))}
             </div>
             <p className="chat-hint">
-              Tip: type <code>/</code> for commands — <code>/clear</code> resets the chat. Press <code>↑</code> to
-              recall messages you sent before.
+              Tip: type <code>/</code> for commands — <code>/clear</code> resets the chat, <code>/undo</code> takes
+              back your last message and its changes. Press <code>↑</code> to recall messages you sent before.
             </p>
           </div>
         )}

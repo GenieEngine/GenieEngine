@@ -18,10 +18,12 @@ import {
   getSessionID,
   newChatSession,
   pendingQuestion,
+  redoChat,
   rejectQuestion,
   resumeSession,
   sendChatMessage,
-  shutdownChat
+  shutdownChat,
+  undoChat
 } from './services/opencode'
 import { getSetupStatus, saveSetup } from './services/opencode-setup'
 import { cancelExport, revealExport, runExport } from './services/export'
@@ -138,6 +140,9 @@ export function registerIpcHandlers(): void {
     sendChatMessage(message, requireProject().path, attachments ?? [], tier === 'large' ? 'large' : 'medium')
   )
   handle('chat:cancel', () => cancelChat())
+  // /undo & /redo: OpenCode's native session revert (conversation AND files).
+  handle('chat:undo', () => undoChat(requireProject().path))
+  handle('chat:redo', () => redoChat(requireProject().path))
   // /clear: fresh conversation and the saved transcript is forgotten (the
   // ↑/↓ input history intentionally survives — see chat-history.ts).
   handle('chat:new', async () => {

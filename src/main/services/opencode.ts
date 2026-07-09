@@ -632,6 +632,14 @@ async function sessionGone(srv: OpencodeServer, id: string): Promise<boolean> {
   }
 }
 
+/** First actual use of a session id restored from saved chat history: drop it if the server no longer has it. */
+async function verifyRestoredSession(srv: OpencodeServer): Promise<void> {
+  if (sessionID && sessionRestored) {
+    sessionRestored = false
+    if (await sessionGone(srv, sessionID)) sessionID = null
+  }
+}
+
 /**
  * Provider errors that mean the accumulated conversation no longer fits the
  * model's context window (observed: "Input length 202850 exceeds the maximum
@@ -704,10 +712,7 @@ export async function sendChatMessage(
     // A session restored from a saved chat continues that conversation (OpenCode
     // persists sessions per directory) — verified against the server the first
     // time it is actually used.
-    if (sessionID && sessionRestored) {
-      sessionRestored = false
-      if (await sessionGone(srv, sessionID)) sessionID = null
-    }
+    await verifyRestoredSession(srv)
     if (!sessionID) {
       // Starting a fresh session while the project still has a saved
       // transcript (stale/lost session id, or the context-overflow rollover
@@ -889,6 +894,116 @@ export function cancelChat(): void {
   if (busy && server && sessionID) {
     cancelled = true
     void fetch(`${server.base}/session/${sessionID}/abort`, { method: 'POST' }).catch(() => {})
+  }
+}
+
+/*
+ * /undo and /redo — OpenCode's native session revert. Reverting to a user
+ * message hides that turn and everything after it from the model AND restores
+ * the project files to the snapshot OpenCode took before the turn ran;
+ * unrevert restores the pre-revert state (the revert record keeps its own
+ * snapshot for that). The revert point lives on the session, so it survives
+ * app restarts — but sending a new message makes the pending revert permanent
+ * (OpenCode trims the reverted messages), which is why redo availability is
+ * additionally tracked renderer-side.
+ */
+
+/**
+ * The session's real user turns (message ids, ascending). Excludes the
+ * synthetic user-role prompts this module injects (RESUME_NUDGE, sent to
+ * resume a turn after a transient provider error): those belong to the turn
+ * of the real user message before them, so a revert must never target one —
+ * it would restore half a turn.
+ */
+async function listUserTurns(srv: OpencodeServer, session: string): Promise<string[]> {
+  /* eslint-disable @typescript-eslint/no-explicit-any -- untyped server JSON */
+  const entries = await api<any[]>(srv, 'GET', `/session/${session}/message`)
+  const ids: string[] = []
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    const info = entry?.info
+    if (info?.role !== 'user' || typeof info.id !== 'string') continue
+    const parts = Array.isArray(entry.parts) ? entry.parts : []
+    if (parts.some((p: any) => p?.type === 'text' && p.text === RESUME_NUDGE)) continue
+    ids.push(info.id)
+  }
+  /* eslint-enable @typescript-eslint/no-explicit-any */
+  return ids.sort()
+}
+
+/** The session's pending revert point, if any (set by a previous undo). */
+async function revertPoint(srv: OpencodeServer, session: string): Promise<string | null> {
+  const info = await api<{ revert?: { messageID?: string } }>(srv, 'GET', `/session/${session}`)
+  return info.revert?.messageID ?? null
+}
+
+/**
+ * The session undo/redo operate on, or null when there is no conversation
+ * (no session yet, or the saved id is gone from the server). Never creates a
+ * session — unlike a send, an undo must not open a fresh conversation.
+ */
+async function activeSession(projectPath: string): Promise<{ srv: OpencodeServer; session: string } | null> {
+  if (!sessionID) return null
+  const srv = await ensureServer(projectPath)
+  await verifyRestoredSession(srv)
+  return sessionID ? { srv, session: sessionID } : null
+}
+
+/** Wait for an aborted turn to settle (release `busy`) before reverting under it. */
+async function waitForIdle(timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs
+  while (busy && Date.now() < deadline) await new Promise((r) => setTimeout(r, 100))
+  return !busy
+}
+
+/**
+ * /undo: revert the conversation to just before its most recent user turn
+ * (or one turn further back on repeat), restoring the files that turn
+ * touched. Returns the reverted-to message id so the renderer can drop the
+ * matching turns from its own transcript — the renderer's assistant message
+ * ids ARE OpenCode message ids, which is what makes that mapping possible.
+ */
+export async function undoChat(projectPath: string): Promise<{ revertedTo: string }> {
+  // Undoing a turn that is still streaming aborts it first (matching the
+  // native TUI), then reverts once the in-flight POST has settled.
+  if (busy) {
+    cancelChat()
+    if (!(await waitForIdle(8000))) {
+      throw new Error('Could not stop the current response — press Stop, then try again.')
+    }
+  }
+  const active = await activeSession(projectPath)
+  if (!active) throw new Error('Nothing to undo.')
+  const { srv, session } = active
+  busy = true // hold the turn so a racing send can't interleave with the revert
+  try {
+    const point = await revertPoint(srv, session)
+    const target = (await listUserTurns(srv, session)).filter((id) => !point || id < point).pop()
+    if (!target) throw new Error('Nothing to undo.')
+    await api(srv, 'POST', `/session/${session}/revert`, { messageID: target })
+    return { revertedTo: target }
+  } finally {
+    busy = false
+  }
+}
+
+/**
+ * /redo: step the revert point forward one user turn, or fully restore the
+ * conversation and files once the newest undone turn is reached (unrevert).
+ */
+export async function redoChat(projectPath: string): Promise<void> {
+  if (busy) throw new Error('A response is already in progress')
+  const active = await activeSession(projectPath)
+  if (!active) throw new Error('Nothing to redo.')
+  const { srv, session } = active
+  busy = true
+  try {
+    const point = await revertPoint(srv, session)
+    if (!point) throw new Error('Nothing to redo.')
+    const next = (await listUserTurns(srv, session)).find((id) => id > point)
+    if (next) await api(srv, 'POST', `/session/${session}/revert`, { messageID: next })
+    else await api(srv, 'POST', `/session/${session}/unrevert`, {})
+  } finally {
+    busy = false
   }
 }
 
