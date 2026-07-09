@@ -8,8 +8,10 @@ import { dirname, join, sep } from 'node:path'
 import { sendToRenderer } from '../window'
 import { resolveOpencode } from './binaries'
 import { loadTranscriptRecap, saveChatAttachments, saveChatUploads, type SavedUpload } from './chat-history'
-// Benign import cycle (opencode-setup imports shutdownChat): both sides only
-// use the other's exports at call time, never during module evaluation.
+// Benign import cycles (opencode-setup and opencode-config → opencode-setup
+// import shutdownChat): all sides only use the other's exports at call time,
+// never during module evaluation.
+import { opengenieMcpEntry } from './opencode-config'
 import { GAME_TESTER_AGENT, IMAGE_READER_AGENT } from './opencode-setup'
 import { getHarnessEndpoint } from './test-harness'
 import type { ChatAttachment, ChatPartUpdate, ChatToolStatus } from '../../shared/types'
@@ -322,6 +324,27 @@ function withRealpath(p: string): string[] {
 }
 
 /**
+ * The .app bundle holding the running executable (macOS layout is always
+ * <bundle>.app/Contents/MacOS/<binary>). Falls back to the binary's own
+ * directory if the executable somehow isn't in a bundle — never a broad
+ * ancestor, since this feeds a sandbox allow-rule.
+ */
+function appBundleRoot(): string {
+  const bundle = dirname(dirname(dirname(process.execPath)))
+  return bundle.endsWith('.app') ? bundle : dirname(process.execPath)
+}
+
+/** Every ancestor directory of p, from dirname(p) up to the filesystem root. */
+function ancestorDirs(p: string): string[] {
+  const out: string[] = []
+  for (let dir = dirname(p); ; dir = dirname(dir)) {
+    out.push(dir)
+    if (dir === dirname(dir)) break
+  }
+  return out
+}
+
+/**
  * Wraps the chat-server command in a macOS seatbelt sandbox, inherited by
  * every tool it spawns (bash, rg, git, the MCP bridge). Two reasons:
  *
@@ -339,6 +362,17 @@ function withRealpath(p: string): string[] {
  * when it lives inside a denied folder (projects commonly sit in Documents;
  * SBPL is last-match-wins), and the app's own files stay readable — the
  * opencode binary, MCP bridge, and dev vendor tree live there.
+ *
+ * "The app's own files" must cover the WHOLE bundle, not just Resources:
+ * OpenCode spawns the MCP bridge with the app's own executable
+ * (Contents/MacOS, loading Contents/Frameworks), and when the app runs from
+ * a DMG mounted under /Volumes — a denied root — the bridge died at dyld
+ * time, silently taking every opengenie game tool with it ("server
+ * unavailable key=opengenie" in the OpenCode log). Electron startup also
+ * canonicalizes its own bundle path, stat'ing each ancestor directory
+ * (/Volumes, the mount root), so those need metadata-level reads too or ICU
+ * init crashes before main(). Metadata only — denied directories still can't
+ * be listed or read.
  */
 function sandboxCommand(opencode: string, args: string[], projectPath: string): { command: string; args: string[] } {
   if (process.platform !== 'darwin') return { command: opencode, args }
@@ -365,15 +399,25 @@ function sandboxCommand(opencode: string, args: string[], projectPath: string): 
     join(app.getPath('userData'), 'gptimage-credentials.json'),
     join(app.getPath('userData'), 'hy3d-credentials.json')
   ]
-  const allowRead = [...withRealpath(app.getAppPath()), ...withRealpath(process.resourcesPath), dirname(opencode)]
+  const allowRead = [
+    ...withRealpath(app.getAppPath()),
+    ...withRealpath(process.resourcesPath),
+    ...withRealpath(appBundleRoot()),
+    dirname(opencode)
+  ]
   const allowReadWrite = withRealpath(projectPath)
+  // Ancestors of every allowed path (deduped), covering path canonicalization
+  // through denied roots — e.g. /Volumes and the mount root for a DMG-run
+  // app, or an external volume holding the project.
+  const allowStat = [...new Set([...allowRead, ...allowReadWrite].flatMap(ancestorDirs))]
   const profile = [
     '(version 1)',
     '(allow default)',
     `(deny file-read* file-write* ${denyDirs.map((p) => `(subpath ${sbplPath(p)})`).join(' ')})`,
     `(deny file-read* ${denyFiles.map((p) => `(literal ${sbplPath(p)})`).join(' ')})`,
     `(allow file-read* ${allowRead.map((p) => `(subpath ${sbplPath(p)})`).join(' ')})`,
-    `(allow file-read* file-write* ${allowReadWrite.map((p) => `(subpath ${sbplPath(p)})`).join(' ')})`
+    `(allow file-read* file-write* ${allowReadWrite.map((p) => `(subpath ${sbplPath(p)})`).join(' ')})`,
+    `(allow file-read-metadata ${allowStat.map((p) => `(literal ${sbplPath(p)})`).join(' ')})`
   ].join('\n')
   return { command: '/usr/bin/sandbox-exec', args: ['-p', profile, opencode, ...args] }
 }
@@ -409,6 +453,14 @@ async function ensureServer(projectPath: string): Promise<OpencodeServer> {
   // reach THIS app instance even when several OpenGenie instances are running
   // (harness.json alone is shared and only names whichever registered last).
   const harness = getHarnessEndpoint()
+  // Same multi-instance problem one level up: the global config's
+  // mcp.opengenie command names the binary of whichever instance STARTED
+  // last, which this instance's sandbox usually can't read (and which is gone
+  // entirely once its DMG is ejected). OPENCODE_CONFIG_CONTENT merges over
+  // the file config at server startup — objects merge, arrays replace — so
+  // the spawned server always runs this instance's own bridge while the
+  // user's other config keys survive.
+  const mcpEntry = opengenieMcpEntry()
   const { command, args } = sandboxCommand(
     opencode,
     ['serve', '--port', String(port), '--hostname', '127.0.0.1'],
@@ -427,7 +479,8 @@ async function ensureServer(projectPath: string): Promise<OpencodeServer> {
       OPENCODE_ENABLE_EXA: '1',
       ...(harness
         ? { OPENGENIE_HARNESS_PORT: String(harness.port), OPENGENIE_HARNESS_TOKEN: harness.token }
-        : {})
+        : {}),
+      ...(mcpEntry ? { OPENCODE_CONFIG_CONTENT: JSON.stringify({ mcp: { opengenie: mcpEntry } }) } : {})
     },
     stdio: ['ignore', 'pipe', 'pipe']
   })
@@ -576,6 +629,31 @@ const CONTEXT_OVERFLOW_RE =
   /context[_ -]?(length|window)|maximum (allowed )?(input|context|prompt)|input (length|is )?too long|prompt is too long|input length \d+ exceeds|too many (total )?(text bytes|input tokens)/i
 
 /**
+ * Provider/infra failures that tend to clear on their own within seconds:
+ * backend 5xx, gateway trouble, capacity. Observed live from an
+ * OpenAI-compatible endpoint mid-turn: "HTTP 500: Internal server error
+ * Failed to find a worker for remote generation." and "HTTP 500: … Error in
+ * kv cache transfer for generation requests (executor rank: 1)". Unlike
+ * context overflow these leave the session perfectly healthy — the agent
+ * loop just stopped — so the recovery is to resume the SAME session, never
+ * to roll over.
+ */
+const TRANSIENT_PROVIDER_RE =
+  /HTTP (5\d\d|429)|internal server error|bad gateway|too many requests|overloaded|service unavailable|temporarily unavailable|failed to find a worker|kv cache/i
+
+/** Backoff before each automatic resume of a transiently-failed turn. */
+const TRANSIENT_RETRY_DELAYS_MS = [2000, 8000]
+
+/**
+ * What the model sees when its turn is resumed after a transient provider
+ * error. A user-role message, like the recap: the renderer never displays
+ * user-message echoes, so the user sees one seamless turn.
+ */
+const RESUME_NUDGE =
+  '[Your previous response was cut off by a temporary provider error, not by the user. ' +
+  'Continue exactly where you left off — do not restart the task or repeat work that already completed.]'
+
+/**
  * Validates and kicks off a chat turn. Resolves as soon as the request is
  * accepted; progress streams via chat:part events and completion (or failure)
  * arrives as a chat:done event when the blocking POST returns.
@@ -691,10 +769,38 @@ export async function sendChatMessage(
     // the renderer experiences one seamless turn.
     let retryInFreshSession = false
     try {
-      /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
-      const reply = await api<any>(srv, 'POST', `/session/${currentSession}/message`, { parts })
-      const error = reply?.info?.error
-      const detail = error ? String(error?.data?.message || error?.name || JSON.stringify(error)) : null
+      /* eslint-disable @typescript-eslint/no-explicit-any -- untyped server reply */
+      const turnError = (reply: any): string | null => {
+        const error = reply?.info?.error
+        return error ? String(error?.data?.message || error?.name || JSON.stringify(error)) : null
+      }
+      // A transient backend failure (TRANSIENT_PROVIDER_RE) kills the agent
+      // loop mid-turn, but everything up to it — applied edits, tool results —
+      // is safely in the session. Resume the same session with a nudge rather
+      // than surfacing the error: re-sending the user message would duplicate
+      // it, and a fresh session would orphan the completed work. Bounded, so
+      // a provider that is genuinely down still surfaces its error after a
+      // couple of attempts instead of retrying forever.
+      let reply: any
+      for (let attempt = 0; ; attempt++) {
+        reply = await api<any>(srv, 'POST', `/session/${currentSession}/message`, {
+          parts: attempt ? [{ type: 'text', text: RESUME_NUDGE }] : parts
+        })
+        const detail = turnError(reply)
+        if (
+          detail === null ||
+          !TRANSIENT_PROVIDER_RE.test(detail) ||
+          attempt >= TRANSIENT_RETRY_DELAYS_MS.length ||
+          cancelled
+        ) {
+          break
+        }
+        console.warn(`[opengenie] transient provider error, resuming turn (attempt ${attempt + 1}):`, detail)
+        await new Promise((r) => setTimeout(r, TRANSIENT_RETRY_DELAYS_MS[attempt]))
+        if (cancelled) break
+      }
+      const detail = turnError(reply)
+      /* eslint-enable @typescript-eslint/no-explicit-any */
       // The conversation no longer fits the model's context window; nothing
       // sent into this session can ever succeed again. Roll over: next
       // session starts fresh and loadTranscriptRecap carries the visible

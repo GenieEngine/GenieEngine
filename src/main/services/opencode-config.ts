@@ -14,7 +14,10 @@ import { applyAgentConfig, configuredImageModel } from './opencode-setup'
  *    project. The bridge is spawned with the app's own binary in Node mode
  *    (ELECTRON_RUN_AS_NODE), so users don't need Node installed; it locates
  *    the running app through harness.json (see test-harness.ts), so this
- *    config stays valid across app restarts.
+ *    config stays valid across app restarts. This file entry serves OpenCode
+ *    sessions launched outside the app (e.g. a terminal); servers the app
+ *    spawns get a per-spawn override pointing at their own instance instead
+ *    (see opengenieMcpEntry).
  *  - `agent.image-reader` / `agent.game-tester` — the image-enabled subagents
  *    (see opencode-setup.ts). Re-applied here so users who never reopen the
  *    settings panel (upgrades) still get them, and so prompt/tool refinements
@@ -22,12 +25,37 @@ import { applyAgentConfig, configuredImageModel } from './opencode-setup'
  *
  * Everything else in the config is the user's and is left untouched.
  */
+/**
+ * This instance's `mcp.opengenie` entry, pointing at its own binary and
+ * bridge script by absolute path (null when the bridge script is missing —
+ * broken install). Used twice:
+ *
+ *  - written into the global config below, as the fallback for OpenCode
+ *    sessions not launched by the app;
+ *  - passed per spawn via OPENCODE_CONFIG_CONTENT (see ensureServer in
+ *    opencode.ts). The global file names exactly ONE instance's paths
+ *    (last-started wins), so with several installs around (dev checkout +
+ *    mounted DMG builds) it points every other instance at a binary that
+ *    instance's sandbox can't read — which silently killed the bridge and
+ *    all game tools. The override keeps each server on its own bridge.
+ */
+export function opengenieMcpEntry(): Record<string, unknown> | null {
+  const bridgePath = app.isPackaged
+    ? join(process.resourcesPath, 'app.asar.unpacked', 'resources', 'mcp-bridge.mjs')
+    : join(app.getAppPath(), 'resources', 'mcp-bridge.mjs')
+  if (!existsSync(bridgePath)) return null
+  return {
+    type: 'local',
+    command: [process.execPath, bridgePath],
+    enabled: true,
+    environment: { ELECTRON_RUN_AS_NODE: '1' }
+  }
+}
+
 export async function ensureOpencodeConfig(): Promise<void> {
   try {
-    const bridgePath = app.isPackaged
-      ? join(process.resourcesPath, 'app.asar.unpacked', 'resources', 'mcp-bridge.mjs')
-      : join(app.getAppPath(), 'resources', 'mcp-bridge.mjs')
-    if (!existsSync(bridgePath)) return
+    const entry = opengenieMcpEntry()
+    if (!entry) return
 
     const configDir = join(homedir(), '.config', 'opencode')
     const configPath = join(configDir, 'opencode.json')
@@ -42,12 +70,7 @@ export async function ensureOpencodeConfig(): Promise<void> {
     const before = JSON.stringify(config)
 
     const mcp = (config.mcp ?? {}) as Record<string, unknown>
-    mcp.opengenie = {
-      type: 'local',
-      command: [process.execPath, bridgePath],
-      enabled: true,
-      environment: { ELECTRON_RUN_AS_NODE: '1' }
-    }
+    mcp.opengenie = entry
     config.mcp = mcp
 
     // Without this flag OpenCode halts the whole agent run when a permission
