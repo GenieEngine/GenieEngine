@@ -7,7 +7,7 @@ import { homedir, tmpdir } from 'node:os'
 import { dirname, join, sep } from 'node:path'
 import { sendToRenderer } from '../window'
 import { resolveOpencode } from './binaries'
-import { saveChatAttachments, saveChatUploads, type SavedUpload } from './chat-history'
+import { loadTranscriptRecap, saveChatAttachments, saveChatUploads, type SavedUpload } from './chat-history'
 // Benign import cycle (opencode-setup imports shutdownChat): both sides only
 // use the other's exports at call time, never during module evaluation.
 import { GAME_TESTER_AGENT, IMAGE_READER_AGENT } from './opencode-setup'
@@ -453,6 +453,16 @@ async function ensureServer(projectPath: string): Promise<OpencodeServer> {
   return srv
 }
 
+/** API failure carrying the HTTP status, so callers can tell 404 from flake. */
+class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status?: number
+  ) {
+    super(message)
+  }
+}
+
 /**
  * API call via node:http with timeouts disabled: the message POST blocks for
  * the entire agent run, which can far exceed undici fetch's 5-minute default.
@@ -468,7 +478,12 @@ function api<T>(srv: OpencodeServer, method: string, path: string, body?: unknow
         res.on('data', (chunk: string) => (data += chunk))
         res.on('end', () => {
           if ((res.statusCode ?? 500) >= 400) {
-            reject(new Error(`OpenCode API ${method} ${path} failed (${res.statusCode}): ${data.slice(0, 300)}`))
+            reject(
+              new ApiError(
+                `OpenCode API ${method} ${path} failed (${res.statusCode}): ${data.slice(0, 300)}`,
+                res.statusCode
+              )
+            )
             return
           }
           try {
@@ -526,43 +541,94 @@ async function assertProviderAvailable(srv: OpencodeServer): Promise<void> {
 }
 
 /**
+ * Whether a saved session id no longer exists on the server. Only an explicit
+ * 404/410 counts: forgetting the session on ANY failure (as this used to do)
+ * silently forked the conversation into a fresh context-less session whenever
+ * the GET merely flaked, which users experienced as the assistant "losing its
+ * memory" after reopening a project. Transient failures are retried, then
+ * surfaced as a send error — the user can retry with the session intact.
+ */
+async function sessionGone(srv: OpencodeServer, id: string): Promise<boolean> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await api(srv, 'GET', `/session/${id}`)
+      return false
+    } catch (err) {
+      if (err instanceof ApiError && (err.status === 404 || err.status === 410)) return true
+      if (attempt >= 2) {
+        throw new Error(
+          `Could not verify the saved conversation (${err instanceof Error ? err.message : err}). Try again.`
+        )
+      }
+      await new Promise((r) => setTimeout(r, 300))
+    }
+  }
+}
+
+/**
+ * Provider errors that mean the accumulated conversation no longer fits the
+ * model's context window (observed: "Input length 202850 exceeds the maximum
+ * allowed input length of 202720 tokens"; also matches the OpenAI/Anthropic
+ * phrasings). Once a session hits this, EVERY further send into it fails the
+ * same way — the only way forward is a fresh session, re-seeded with a recap.
+ */
+const CONTEXT_OVERFLOW_RE =
+  /context[_ -]?(length|window)|maximum (allowed )?(input|context|prompt)|input (length|is )?too long|prompt is too long|input length \d+ exceeds|too many (total )?(text bytes|input tokens)/i
+
+/**
  * Validates and kicks off a chat turn. Resolves as soon as the request is
  * accepted; progress streams via chat:part events and completion (or failure)
  * arrives as a chat:done event when the blocking POST returns.
+ *
+ * `isRetry` marks the internal second attempt after a context-overflow
+ * rollover: it keeps the turn claimed (busy stays true, so the renderer sees
+ * one seamless turn) and must never recurse again.
  */
 export async function sendChatMessage(
   message: string,
   projectPath: string,
-  attachments: ChatAttachment[] = []
+  attachments: ChatAttachment[] = [],
+  isRetry = false
 ): Promise<void> {
-  if (busy) throw new Error('A response is already in progress')
-  // Claim the turn before the first await — two rapid sends could otherwise
-  // both pass the guard above while the first was still starting its server.
-  busy = true
-  cancelled = false
+  if (!isRetry) {
+    if (busy) throw new Error('A response is already in progress')
+    // Claim the turn before the first await — two rapid sends could otherwise
+    // both pass the guard above while the first was still starting its server.
+    busy = true
+    cancelled = false
+  }
 
   let srv: OpencodeServer
   let uploaded: SavedUpload[] = []
+  let recap: string | null = null
   try {
     srv = await ensureServer(projectPath)
     await assertProviderAvailable(srv)
+    // A session restored from a saved chat continues that conversation (OpenCode
+    // persists sessions per directory) — verified against the server the first
+    // time it is actually used.
+    if (sessionID && sessionRestored) {
+      sessionRestored = false
+      if (await sessionGone(srv, sessionID)) sessionID = null
+    }
+    if (!sessionID) {
+      // Starting a fresh session while the project still has a saved
+      // transcript (stale/lost session id, or the context-overflow rollover
+      // below): seed it with a recap of that transcript. The chat window and
+      // the model must not diverge — this is what carries the conversation
+      // the user can see back into the new OpenCode session. After /clear
+      // there is no saved transcript, so a cleared chat correctly starts raw.
+      recap = await loadTranscriptRecap(projectPath).catch(() => null)
+      const session = await api<{ id: string }>(srv, 'POST', '/session', {})
+      sessionID = session.id
+    }
     // Asset uploads (zips, folders, models…) are copied into the project's
     // .opengenie/attachments/ — the only place the sandboxed assistant can
     // reach them. Unlike the best-effort image saving below, a failure here
     // fails the whole send: the message must not describe files that never
     // arrived. The error text is user-readable (caps, unreadable source).
+    // Copied after the session checks so a failed verify can't duplicate them.
     uploaded = await saveChatUploads(projectPath, attachments.filter((a) => a.path))
-    // A session restored from a saved chat continues that conversation (OpenCode
-    // persists sessions per directory) — but only if the server still knows it;
-    // otherwise fall back to a fresh session rather than failing the send.
-    if (sessionID && sessionRestored) {
-      await api(srv, 'GET', `/session/${sessionID}`).catch(() => (sessionID = null))
-      sessionRestored = false
-    }
-    if (!sessionID) {
-      const session = await api<{ id: string }>(srv, 'POST', '/session', {})
-      sessionID = session.id
-    }
   } catch (err) {
     busy = false
     throw err
@@ -578,7 +644,10 @@ export async function sendChatMessage(
   // "ERROR: Cannot read" note), and the image-enabled subagents can only
   // reach an image through a file path. Best-effort — a failed save just
   // means the message goes out the old way.
-  let text = message
+  // The recap rides inside this message rather than as its own turn: a
+  // separate priming message would cost a full model round-trip. The renderer
+  // shows its own copy of the user text, so the recap never appears in the UI.
+  let text = recap ? `${recap}\n\n${message}` : message
   const images = attachments.filter((a) => a.dataUrl && a.mime.startsWith('image/'))
   if (images.length) {
     const saved = await saveChatAttachments(projectPath, images).catch(() => [] as string[])
@@ -616,32 +685,73 @@ export async function sendChatMessage(
   parts.push({ type: 'text', text })
 
   void (async () => {
+    // Set when the turn died to context overflow and a rollover retry should
+    // run: the retry happens in `finally` so this attempt's api/renderer work
+    // is fully settled first, and `busy` stays claimed across the handoff so
+    // the renderer experiences one seamless turn.
+    let retryInFreshSession = false
     try {
       /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
       const reply = await api<any>(srv, 'POST', `/session/${currentSession}/message`, { parts })
+      const error = reply?.info?.error
+      const detail = error ? String(error?.data?.message || error?.name || JSON.stringify(error)) : null
+      // The conversation no longer fits the model's context window; nothing
+      // sent into this session can ever succeed again. Roll over: next
+      // session starts fresh and loadTranscriptRecap carries the visible
+      // conversation into it. Without this, users were stuck resending into
+      // a permanently failing session until they gave up and lost context.
+      if (detail !== null && CONTEXT_OVERFLOW_RE.test(detail)) {
+        sessionID = null
+        if (!isRetry && !cancelled) {
+          retryInFreshSession = true
+          return
+        }
+      }
       // Re-send the final parts: guarantees the full text is present even if
       // the last SSE frames raced the POST response.
       for (const part of reply?.parts ?? []) {
         const update = translatePart(part)
         if (update) sendToRenderer('chat:part', update)
       }
-      const error = reply?.info?.error
       if (cancelled) {
         sendToRenderer('chat:done', { ok: false, cancelled: true })
-      } else if (error) {
-        const detail = error?.data?.message || error?.name || JSON.stringify(error)
-        sendToRenderer('chat:done', { ok: false, error: String(detail) })
+      } else if (detail !== null) {
+        sendToRenderer('chat:done', {
+          ok: false,
+          error: CONTEXT_OVERFLOW_RE.test(detail)
+            ? `This message is too large for the model's context window even in a fresh session — ` +
+              `try a shorter message or smaller attachments. (${detail})`
+            : detail
+        })
       } else {
         sendToRenderer('chat:done', { ok: true })
       }
     } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err)
+      // Overflow surfaced as a failed request rather than an errored reply:
+      // still roll over so the NEXT send starts a recap-seeded session, but
+      // don't auto-retry — the POST may have half-landed, and a duplicate
+      // user message is worse than asking for a resend.
+      if (CONTEXT_OVERFLOW_RE.test(detail)) sessionID = null
       sendToRenderer('chat:done', {
         ok: false,
         cancelled,
-        error: cancelled ? undefined : err instanceof Error ? err.message : String(err)
+        error: cancelled ? undefined : detail
       })
     } finally {
-      busy = false
+      if (retryInFreshSession) {
+        void sendChatMessage(message, projectPath, attachments, true).catch((err) => {
+          // The retry failed before its own turn could report — close out the
+          // renderer's pending turn here or the chat would spin forever.
+          sendToRenderer('chat:done', {
+            ok: false,
+            error: err instanceof Error ? err.message : String(err)
+          })
+          busy = false
+        })
+      } else {
+        busy = false
+      }
     }
   })()
 }
@@ -706,12 +816,16 @@ export function newChatSession(): void {
 /**
  * Continue a session saved in the project's chat history (called when a
  * project with a restored transcript is opened). Verified lazily on the next
- * send — see sendChatMessage.
+ * send — see sendChatMessage. A null id is ignored rather than applied: it
+ * means the chat file is missing or unreadable, and wiping a live session
+ * over that (e.g. on a window reload whose loadState found nothing) would
+ * silently fork the conversation. Real resets go through newChatSession
+ * (/clear) or shutdownChat (project switch).
  */
 export function resumeSession(id: string | null): void {
-  if (busy) return
+  if (busy || !id) return
   sessionID = id
-  sessionRestored = id !== null
+  sessionRestored = true
 }
 
 /** The active conversation id, saved with the transcript for later resume. */

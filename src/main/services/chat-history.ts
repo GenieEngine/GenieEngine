@@ -25,6 +25,10 @@ import type { ChatAttachment } from '../../shared/types'
  * The transcript is stored as the renderer's own message JSON — the main
  * process treats it as opaque (`unknown[]`) and the renderer validates shape
  * on load, so a schema change can never crash the app, only skip restoring.
+ * The one exception is loadTranscriptRecap, which best-effort extracts plain
+ * text from the saved messages to re-seed a fresh OpenCode session with the
+ * conversation the user can still see; every field access there is guarded,
+ * so a schema change degrades to "no recap", never a crash.
  */
 
 const STATE_DIR = '.opengenie'
@@ -105,6 +109,21 @@ export async function saveChatHistory(
   await writeJsonAtomic(join(dir, CHAT_FILE), { version: 1, sessionID, messages })
 }
 
+/**
+ * Save variant for when the caller can't vouch for the session id: a debounced
+ * save can fire from a project that is no longer active (switch/close races),
+ * and stamping `sessionID: null` then would sever the saved transcript from
+ * its still-valid conversation. Keep whatever id the file already has.
+ */
+export async function saveChatHistoryPreservingSession(
+  projectPath: string,
+  messages: unknown[]
+): Promise<void> {
+  const existing = await readJson<{ sessionID?: unknown }>(join(projectPath, STATE_DIR, CHAT_FILE))
+  const sessionID = typeof existing?.sessionID === 'string' ? existing.sessionID : null
+  await saveChatHistory(projectPath, messages, sessionID)
+}
+
 export async function appendInputHistory(projectPath: string, entry: string): Promise<void> {
   if (!entry.trim()) return
   const dir = await ensureProjectStateDir(projectPath)
@@ -121,6 +140,63 @@ export async function clearChatHistory(projectPath: string): Promise<void> {
   // Attachments only exist for the conversation that referenced them — a
   // cleared chat can't reach the old paths, so drop the files with it.
   await rm(join(projectPath, STATE_DIR, ATTACH_DIR), { recursive: true, force: true })
+}
+
+// Recap limits: enough for the model to pick the conversation back up, small
+// enough that seeding can never itself overflow a context window (~18k chars
+// ≈ 4-5k tokens) — critical because the recap's main consumer is the fresh
+// session started right after the previous one exceeded the model's limit.
+const RECAP_MAX_MESSAGES = 40
+const RECAP_MAX_MESSAGE_CHARS = 1500
+const RECAP_MAX_TOTAL_CHARS = 18000
+
+/**
+ * Plain-text recap of the saved transcript, for re-seeding a NEW OpenCode
+ * session when the saved one is gone (deleted storage, stale id) or unusable
+ * (context overflow). Without this, the chat window shows the restored
+ * conversation while the model starts blank — continuations silently lose
+ * all context. Returns null when there is nothing usable to recap.
+ *
+ * The saved messages are renderer-owned JSON (see header); extraction is
+ * best-effort: user text lives in `content`, assistant text in
+ * `parts[kind === 'text']`, everything else (tool chips, screenshots, errors)
+ * is skipped as noise the model can re-derive from the project files.
+ */
+export async function loadTranscriptRecap(projectPath: string): Promise<string | null> {
+  const { messages } = await loadChatState(projectPath)
+  const lines: string[] = []
+  for (const item of messages.slice(-RECAP_MAX_MESSAGES)) {
+    const m = item as { role?: unknown; content?: unknown; parts?: unknown }
+    let text = ''
+    if (m.role === 'user') {
+      text = typeof m.content === 'string' ? m.content : ''
+    } else if (m.role === 'assistant') {
+      const parts = Array.isArray(m.parts) ? m.parts : []
+      text = parts
+        .map((p: { kind?: unknown; text?: unknown }) =>
+          p?.kind === 'text' && typeof p.text === 'string' ? p.text : ''
+        )
+        .join('')
+      if (!text && typeof m.content === 'string') text = m.content
+    }
+    text = text.trim()
+    if (!text) continue
+    if (text.length > RECAP_MAX_MESSAGE_CHARS) text = `${text.slice(0, RECAP_MAX_MESSAGE_CHARS)} […]`
+    lines.push(`${m.role === 'user' ? 'User' : 'Assistant'}: ${text}`)
+  }
+  if (lines.length === 0) return null
+  let transcript = lines.join('\n\n')
+  while (transcript.length > RECAP_MAX_TOTAL_CHARS && lines.length > 1) {
+    lines.shift() // drop oldest first — recent turns matter most
+    transcript = lines.join('\n\n')
+  }
+  return (
+    '[Restored context: this chat continues an earlier conversation in this project whose ' +
+    'assistant session is no longer available. A recap of the recent conversation follows.]\n\n' +
+    `${transcript}\n\n` +
+    '[End of restored context. Where the recap disagrees with the project files, the files are ' +
+    "the source of truth. Now handle the user's message below.]"
+  )
 }
 
 /**

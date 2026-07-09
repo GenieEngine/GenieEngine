@@ -5,7 +5,13 @@ import { scanEcs } from './services/ecs'
 import * as files from './services/files'
 import { handleGameInput, openGodotEditor, playGame, setGameLayerVisible, setStageRect, stopGame } from './services/game'
 import * as git from './services/git'
-import { appendInputHistory, clearChatHistory, loadChatState, saveChatHistory } from './services/chat-history'
+import {
+  appendInputHistory,
+  clearChatHistory,
+  loadChatState,
+  saveChatHistory,
+  saveChatHistoryPreservingSession
+} from './services/chat-history'
 import {
   answerQuestion,
   cancelChat,
@@ -153,12 +159,13 @@ export function registerIpcHandlers(): void {
       pendingQuestion: await pendingQuestion()
     }
   })
+  // A save from a no-longer-active project (debounced saves race project
+  // switches) can't vouch for the session id — preserve the file's own rather
+  // than stamping null and severing the transcript from its conversation.
   handle('chat:saveHistory', (projectPath: string, messages: unknown[]) =>
-    saveChatHistory(
-      projectPath,
-      messages,
-      getCurrentProject()?.path === projectPath ? getSessionID() : null
-    )
+    getCurrentProject()?.path === projectPath
+      ? saveChatHistory(projectPath, messages, getSessionID())
+      : saveChatHistoryPreservingSession(projectPath, messages)
   )
   handle('chat:appendInput', (projectPath: string, entry: string) => appendInputHistory(projectPath, entry))
   handle('chat:answerQuestion', (requestID: string, answers: string[][]) => answerQuestion(requestID, answers))
