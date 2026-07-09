@@ -126,22 +126,62 @@ export interface ChatQuestionRequest {
   questions: ChatQuestion[]
 }
 
-/** State of the AI provider setup (API keys / endpoints / models). */
-export interface SetupStatus {
-  /** True once the main coding model's endpoint has a usable credential. */
-  configured: boolean
-  /** Base URL of the OpenAI-compatible API the main coding agent talks to. */
+/**
+ * Which chat model a message runs on: the everyday Medium model or the
+ * heavyweight Large model for tough tasks (more capable, may cost more).
+ * The image model is not a tier — it only powers the image subagents.
+ */
+export type ChatModelTier = 'medium' | 'large'
+
+/**
+ * Whether the model should think before answering. Sent to the model as the
+ * standard OpenAI-format `thinking: {"type": "enabled"|"disabled"}` request
+ * field (see https://api-docs.deepseek.com/guides/thinking_mode/);
+ * 'default' sends nothing and leaves the model on its own default.
+ */
+export type ThinkingMode = 'default' | 'enabled' | 'disabled'
+
+/**
+ * How hard the model should think, sent as the standard OpenAI-format
+ * `reasoning_effort` request field; 'default' sends nothing.
+ */
+export type ReasoningEffort = 'default' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+
+/** One model slot's stored connection settings, as shown in the setup panel. */
+export interface ModelSlotStatus {
+  /** Base URL of the OpenAI-compatible API this model is served from. */
   endpoint: string
   model: string
-  /** Endpoint of the image-enabled model that powers the image-reader and game-tester subagents. */
-  imageEndpoint: string
-  imageModel: string
-  /** True once the image model's endpoint has a usable credential. */
-  imageConfigured: boolean
+  /** True once this model's endpoint has a usable credential. */
+  configured: boolean
+  thinking: ThinkingMode
+  effort: ReasoningEffort
+}
+
+/** State of the AI provider setup (API keys / endpoints / models). */
+export interface SetupStatus {
+  /** True once both chat models are usable (the chat dropdown can switch between them any time). */
+  configured: boolean
+  /** Everyday chat/coding model. */
+  medium: ModelSlotStatus
+  /** Heavyweight chat model for tough tasks. */
+  large: ModelSlotStatus
+  /** Image-enabled model that powers the image-reader and game-tester subagents. */
+  image: ModelSlotStatus
   /** True when Tencent HY 3D credentials are stored (enables 3D asset generation). */
   hy3dConfigured: boolean
   /** True when an OpenAI key is stored (enables 2D image asset generation). */
   gptImageConfigured: boolean
+}
+
+/** One model slot's settings as submitted by the setup panel. */
+export interface ModelSlotRequest {
+  endpoint: string
+  model: string
+  /** Blank = keep the stored key (or share the Medium model's key on a matching endpoint). */
+  apiKey: string
+  thinking: ThinkingMode
+  effort: ReasoningEffort
 }
 
 /**
@@ -150,14 +190,9 @@ export interface SetupStatus {
  * the defaults.
  */
 export interface SetupRequest {
-  /** Main coding model: endpoint + model + key. */
-  endpoint: string
-  model: string
-  apiKey: string
-  /** Image-enabled model used by the image-reader and game-tester subagents. */
-  imageEndpoint: string
-  imageModel: string
-  imageApiKey: string
+  medium: ModelSlotRequest
+  large: ModelSlotRequest
+  image: ModelSlotRequest
   /** Optional asset-generation credentials (blank = unchanged). */
   tencentSecretId?: string
   tencentSecretKey?: string
@@ -330,7 +365,8 @@ export interface OpenGenieApi {
   onGameFps(cb: (fps: number) => void): () => void
 
   // AI chat (OpenCode)
-  chatSend(message: string, attachments?: ChatAttachment[]): Promise<Result<null>>
+  /** `tier` picks which chat model answers; the conversation continues either way. */
+  chatSend(message: string, attachments?: ChatAttachment[], tier?: ChatModelTier): Promise<Result<null>>
   /**
    * Absolute disk path of a picked/dropped File (Electron webUtils) — '' when
    * it has none (e.g. a File synthesized in the page). Synchronous.

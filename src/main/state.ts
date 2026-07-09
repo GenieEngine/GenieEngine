@@ -3,12 +3,25 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import type { ProjectInfo } from '../shared/types'
 
+/**
+ * The two chat models as full `provider/model` refs. Stored here rather than
+ * in opencode.json because OpenCode's config has exactly one `model` field —
+ * the app instead names the chosen model explicitly on every message it
+ * sends. `config.model` is still kept in sync with `medium` so OpenCode
+ * sessions started outside the app behave like the app's default.
+ */
+export interface ChatModelRefs {
+  medium?: string
+  large?: string
+}
+
 interface SettingsFile {
   godotPath?: string
   opencodePath?: string
   recentProjects: string[]
   /** Whether the ECS viewer, files/git sidebars and console output are shown. */
   advancedMode?: boolean
+  chatModels?: ChatModelRefs
 }
 
 let settings: SettingsFile = { recentProjects: [] }
@@ -40,6 +53,15 @@ export function getSettings(): SettingsFile {
 
 export function setGodotPath(path: string): void {
   settings.godotPath = path
+  saveSettings()
+}
+
+export function getChatModelRefs(): ChatModelRefs {
+  return settings.chatModels ?? {}
+}
+
+export function setChatModelRefs(refs: ChatModelRefs): void {
+  settings.chatModels = refs
   saveSettings()
 }
 

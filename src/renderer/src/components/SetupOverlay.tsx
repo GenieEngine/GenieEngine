@@ -1,5 +1,11 @@
 import { useState } from 'react'
-import type { SetupStatus } from '../../../shared/types'
+import type {
+  ModelSlotRequest,
+  ModelSlotStatus,
+  ReasoningEffort,
+  SetupStatus,
+  ThinkingMode
+} from '../../../shared/types'
 import { SparkIcon, XIcon } from './Icons'
 
 interface Props {
@@ -20,6 +26,70 @@ const TABS: { id: SetupTab; label: string }[] = [
 /** Mirrors the main process default — used to tell "same endpoint" from "own endpoint". */
 const OPENROUTER_ENDPOINT = 'https://openrouter.ai/api/v1'
 
+type SlotId = 'medium' | 'large' | 'image'
+
+/** The three model sections on the Models tab, in display (and key-sharing donor) order. */
+const MODEL_SLOTS: { id: SlotId; title: string; hint: string; modelPlaceholder: string }[] = [
+  {
+    id: 'medium',
+    title: 'Chat model — Medium',
+    hint: 'The everyday model that plans and writes your game’s code. Any OpenAI-compatible API endpoint will work.',
+    modelPlaceholder: 'deepseek/deepseek-v4-pro'
+  },
+  {
+    id: 'large',
+    title: 'Chat model — Large',
+    hint: 'A heavyweight model for tough tasks that need extra juice — switch to it from the dropdown in the chat box. Usually slower, and may cost more per message.',
+    modelPlaceholder: 'z-ai/glm-5.2'
+  },
+  {
+    id: 'image',
+    title: 'Image model',
+    hint: 'Runs the assistant’s image helpers — reading images you attach and play-testing your game with screenshots — so it must accept image input.',
+    modelPlaceholder: 'moonshotai/kimi-k2.7-code'
+  }
+]
+
+/** One model section's editable state (its key input stays hidden until revealed). */
+interface SlotState {
+  endpoint: string
+  model: string
+  apiKey: string
+  thinking: ThinkingMode
+  effort: ReasoningEffort
+  /** True once the user asked to change an already-stored key. */
+  keyRevealed: boolean
+}
+
+function initSlot(stored: ModelSlotStatus): SlotState {
+  // An already-configured credential starts hidden behind a button — the
+  // field only appears once the user explicitly asks to change it, so
+  // opening the panel and hitting Save can never blank out a stored key.
+  return {
+    endpoint: stored.endpoint,
+    model: stored.model,
+    apiKey: '',
+    thinking: stored.thinking,
+    effort: stored.effort,
+    keyRevealed: !stored.configured
+  }
+}
+
+const THINKING_CHOICES: { value: ThinkingMode; label: string }[] = [
+  { value: 'default', label: 'Default (model decides)' },
+  { value: 'enabled', label: 'Enabled' },
+  { value: 'disabled', label: 'Disabled' }
+]
+
+const EFFORT_CHOICES: { value: ReasoningEffort; label: string }[] = [
+  { value: 'default', label: 'Default (model decides)' },
+  { value: 'low', label: 'Low' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'high', label: 'High' },
+  { value: 'xhigh', label: 'XHigh' },
+  { value: 'max', label: 'Max' }
+]
+
 /**
  * Stands in for a credential input once it's already configured, so a
  * stored key is never blanked out by opening the panel and hitting Save —
@@ -35,8 +105,8 @@ function ConfiguredButton({ onClick }: { onClick: () => void }): React.JSX.Eleme
 
 /**
  * One model's connection settings: endpoint + model + API key. The Models tab
- * shows two — the main coding model and the image-enabled model that runs the
- * image-reader / game-tester subagents.
+ * shows three — the Medium and Large chat models plus the image-enabled model
+ * that runs the image-reader / game-tester subagents.
  */
 function ModelSection(props: {
   title: string
@@ -46,6 +116,10 @@ function ModelSection(props: {
   model: string
   onModel: (v: string) => void
   modelPlaceholder: string
+  thinking: ThinkingMode
+  onThinking: (v: ThinkingMode) => void
+  effort: ReasoningEffort
+  onEffort: (v: ReasoningEffort) => void
   apiKey: string
   onApiKey: (v: string) => void
   keyPlaceholder: string
@@ -88,6 +162,43 @@ function ModelSection(props: {
         />
       </label>
 
+      <div className="setup-field-row">
+        <label
+          className="setup-field"
+          title="Whether the model thinks before answering — sent as the standard OpenAI `thinking` field. Default sends nothing."
+        >
+          <span className="setup-label">Thinking</span>
+          <select
+            className="setup-select"
+            value={props.thinking}
+            onChange={(e) => props.onThinking(e.target.value as ThinkingMode)}
+          >
+            {THINKING_CHOICES.map(({ value, label }) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label
+          className="setup-field"
+          title="How hard the model thinks — sent as the standard OpenAI `reasoning_effort` field. Default sends nothing; not every model accepts every level."
+        >
+          <span className="setup-label">Reasoning effort</span>
+          <select
+            className="setup-select"
+            value={props.effort}
+            onChange={(e) => props.onEffort(e.target.value as ReasoningEffort)}
+          >
+            {EFFORT_CHOICES.map(({ value, label }) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+
       <div className="setup-field">
         <span className="setup-label">API key</span>
         {props.keyHidden ? (
@@ -114,37 +225,52 @@ function ModelSection(props: {
 /**
  * AI provider setup, shown over a darkened chat until the assistant is
  * connected (and reopenable later from the sidebar gear). Three tabs:
- * the models (any OpenAI-compatible endpoints — a main coding model plus the
- * image-enabled model behind the image-reader and game-tester subagents),
- * optional 2D asset generation (OpenAI gpt-image-1.5) and optional 3D asset
- * generation (Tencent HY 3D).
+ * the models (any OpenAI-compatible endpoints — Medium and Large chat models
+ * plus the image-enabled model behind the image-reader and game-tester
+ * subagents), optional 2D asset generation (OpenAI gpt-image-1.5) and
+ * optional 3D asset generation (Tencent HY 3D).
  */
 export function SetupOverlay({ status, onConfigured, onClose }: Props): React.JSX.Element {
   const [tab, setTab] = useState<SetupTab>('agent')
-  const [endpoint, setEndpoint] = useState(status.endpoint)
-  const [model, setModel] = useState(status.model)
-  const [apiKey, setApiKey] = useState('')
-  const [imageEndpoint, setImageEndpoint] = useState(status.imageEndpoint)
-  const [imageModel, setImageModel] = useState(status.imageModel)
-  const [imageApiKey, setImageApiKey] = useState('')
+  const [slots, setSlots] = useState<Record<SlotId, SlotState>>(() => ({
+    medium: initSlot(status.medium),
+    large: initSlot(status.large),
+    image: initSlot(status.image)
+  }))
   const [tencentId, setTencentId] = useState('')
   const [tencentKey, setTencentKey] = useState('')
   const [openaiKey, setOpenaiKey] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  // Each already-configured credential starts hidden behind a button — the
-  // field only appears once the user explicitly asks to change it, so
-  // opening the panel and hitting Save can never blank out a stored key.
-  const [providerKeyRevealed, setProviderKeyRevealed] = useState(!status.configured)
-  const [imageKeyRevealed, setImageKeyRevealed] = useState(!status.imageConfigured)
   const [tencentRevealed, setTencentRevealed] = useState(!status.hy3dConfigured)
   const [openaiKeyRevealed, setOpenaiKeyRevealed] = useState(!status.gptImageConfigured)
 
-  // Matching endpoints share one provider (and one API key) in the OpenCode
-  // config, so the image key is only mandatory for a separate endpoint.
-  const sameEndpoint =
-    (imageEndpoint.trim() || OPENROUTER_ENDPOINT) === (endpoint.trim() || OPENROUTER_ENDPOINT)
+  const updateSlot = (id: SlotId, patch: Partial<SlotState>): void =>
+    setSlots((prev) => ({ ...prev, [id]: { ...prev[id], ...patch } }))
+
+  const norm = (endpoint: string): string => endpoint.trim() || OPENROUTER_ENDPOINT
+
+  // A slot can vouch for a key of its own when one was typed now, or when a
+  // stored one exists AND the endpoint hasn't changed (a stored key belongs
+  // to the endpoint it was entered for). Keyless slots can instead share a
+  // vouching slot's key by pointing at the same endpoint — the main process
+  // copies it into the slot's own credential on save.
+  const hasOwnKey = (id: SlotId): boolean =>
+    !!slots[id].apiKey.trim() || (status[id].configured && norm(slots[id].endpoint) === norm(status[id].endpoint))
+  const covered = (id: SlotId): boolean =>
+    hasOwnKey(id) ||
+    MODEL_SLOTS.some((other) => other.id !== id && norm(slots[other.id].endpoint) === norm(slots[id].endpoint) && hasOwnKey(other.id))
+
+  const keyPlaceholder = (id: SlotId): string => {
+    if (status[id].configured && norm(slots[id].endpoint) === norm(status[id].endpoint)) {
+      return 'Leave blank to keep the stored key'
+    }
+    if (id !== 'medium' && norm(slots[id].endpoint) === norm(slots.medium.endpoint)) {
+      return 'Leave blank to use the Medium model’s API key'
+    }
+    return id === 'medium' && !status.medium.configured ? 'Your API key' : 'API key for this endpoint'
+  }
 
   // Save applies every tab at once, so a validation error may concern a tab
   // the user isn't looking at — switch to it so the message makes sense.
@@ -154,18 +280,14 @@ export function SetupOverlay({ status, onConfigured, onClose }: Props): React.JS
   }
 
   const save = async (): Promise<void> => {
-    // A provider key is only mandatory on first-time setup; when reopened via
-    // the gear the user may just be adding asset-generation credentials.
-    if (!apiKey.trim() && !status.configured) {
-      fail('An API key is required to connect the assistant.', 'agent')
-      return
-    }
-    if (!sameEndpoint && !imageApiKey.trim() && !status.imageConfigured) {
-      fail(
-        'The image model uses its own endpoint, so it needs its own API key (or point it at the main endpoint to share the key).',
-        'agent'
-      )
-      return
+    for (const { id, title } of MODEL_SLOTS) {
+      if (!covered(id)) {
+        fail(
+          `"${title}" has no usable API key — enter one, or point its endpoint at another section's endpoint to share that key.`,
+          'agent'
+        )
+        return
+      }
     }
     if (!!tencentId.trim() !== !!tencentKey.trim()) {
       fail('Enter both the Tencent SecretId and SecretKey (or leave both blank).', '3d')
@@ -173,13 +295,17 @@ export function SetupOverlay({ status, onConfigured, onClose }: Props): React.JS
     }
     setBusy(true)
     setError(null)
+    const slotRequest = (id: SlotId): ModelSlotRequest => ({
+      endpoint: slots[id].endpoint,
+      model: slots[id].model,
+      apiKey: slots[id].apiKey,
+      thinking: slots[id].thinking,
+      effort: slots[id].effort
+    })
     const result = await window.api.saveSetup({
-      endpoint,
-      model,
-      apiKey,
-      imageEndpoint,
-      imageModel,
-      imageApiKey,
+      medium: slotRequest('medium'),
+      large: slotRequest('large'),
+      image: slotRequest('image'),
       tencentSecretId: tencentId,
       tencentSecretKey: tencentKey,
       openaiApiKey: openaiKey
@@ -187,10 +313,11 @@ export function SetupOverlay({ status, onConfigured, onClose }: Props): React.JS
     setBusy(false)
     if (!result.ok) {
       setError(result.error)
-    } else if (!result.data.configured) {
-      setError('The main model endpoint still has no usable credential — double-check the API key.')
-    } else if (!result.data.imageConfigured) {
-      setError('The image model endpoint still has no usable credential — double-check its API key.')
+      return
+    }
+    const broken = MODEL_SLOTS.find(({ id }) => !result.data[id].configured)
+    if (broken) {
+      setError(`The "${broken.title}" endpoint still has no usable credential — double-check its API key.`)
     } else {
       onConfigured(result.data)
       onClose?.()
@@ -212,8 +339,9 @@ export function SetupOverlay({ status, onConfigured, onClose }: Props): React.JS
           <div>
             <h2 className="setup-title">{status.configured ? 'AI settings' : 'Connect your AI assistant'}</h2>
             <p className="setup-sub">
-              OpenGenie's assistant is powered by OpenCode: a main coding agent plus
-              image-enabled helpers that read your images and play-test your game.
+              OpenGenie's assistant is powered by OpenCode: Medium and Large chat models you can
+              switch between per message, plus image-enabled helpers that read your images and
+              play-test your game.
             </p>
           </div>
         </div>
@@ -235,46 +363,34 @@ export function SetupOverlay({ status, onConfigured, onClose }: Props): React.JS
 
         {tab === 'agent' && (
           <>
-            <ModelSection
-              title="Main coding model"
-              hint="Plans and writes your game's code. Any OpenAI-compatible API endpoint will work."
-              endpoint={endpoint}
-              onEndpoint={setEndpoint}
-              model={model}
-              onModel={setModel}
-              modelPlaceholder="z-ai/glm-5.2"
-              apiKey={apiKey}
-              onApiKey={setApiKey}
-              keyPlaceholder={status.configured ? 'Leave blank to keep the stored key' : 'Your API key'}
-              keyHint="Stored locally in OpenCode's credential file — it never leaves your machine or enters your game's code."
-              keyHidden={status.configured && !providerKeyRevealed}
-              keyAutoFocus={status.configured}
-              onRevealKey={() => setProviderKeyRevealed(true)}
-              onSubmit={() => void save()}
-            />
-
-            <ModelSection
-              title="Image model"
-              hint="Runs the assistant's image helpers — reading images you attach and play-testing your game with screenshots — so it must accept image input."
-              endpoint={imageEndpoint}
-              onEndpoint={setImageEndpoint}
-              model={imageModel}
-              onModel={setImageModel}
-              modelPlaceholder="moonshotai/kimi-k2.7-code"
-              apiKey={imageApiKey}
-              onApiKey={setImageApiKey}
-              keyPlaceholder={
-                sameEndpoint
-                  ? 'Leave blank to use the main API key'
-                  : status.imageConfigured
-                    ? 'Leave blank to keep the stored key'
-                    : 'API key for this endpoint'
-              }
-              keyHidden={status.imageConfigured && !imageKeyRevealed}
-              keyAutoFocus={status.imageConfigured}
-              onRevealKey={() => setImageKeyRevealed(true)}
-              onSubmit={() => void save()}
-            />
+            {MODEL_SLOTS.map(({ id, title, hint, modelPlaceholder }) => (
+              <ModelSection
+                key={id}
+                title={title}
+                hint={hint}
+                endpoint={slots[id].endpoint}
+                onEndpoint={(v) => updateSlot(id, { endpoint: v })}
+                model={slots[id].model}
+                onModel={(v) => updateSlot(id, { model: v })}
+                modelPlaceholder={modelPlaceholder}
+                thinking={slots[id].thinking}
+                onThinking={(v) => updateSlot(id, { thinking: v })}
+                effort={slots[id].effort}
+                onEffort={(v) => updateSlot(id, { effort: v })}
+                apiKey={slots[id].apiKey}
+                onApiKey={(v) => updateSlot(id, { apiKey: v })}
+                keyPlaceholder={keyPlaceholder(id)}
+                keyHint={
+                  id === 'medium'
+                    ? 'Stored locally in OpenCode’s credential file — it never leaves your machine or enters your game’s code.'
+                    : undefined
+                }
+                keyHidden={status[id].configured && !slots[id].keyRevealed}
+                keyAutoFocus={status[id].configured}
+                onRevealKey={() => updateSlot(id, { keyRevealed: true })}
+                onSubmit={() => void save()}
+              />
+            ))}
           </>
         )}
 

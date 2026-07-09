@@ -12,9 +12,9 @@ import { loadTranscriptRecap, saveChatAttachments, saveChatUploads, type SavedUp
 // import shutdownChat): all sides only use the other's exports at call time,
 // never during module evaluation.
 import { opengenieMcpEntry } from './opencode-config'
-import { GAME_TESTER_AGENT, IMAGE_READER_AGENT } from './opencode-setup'
+import { GAME_TESTER_AGENT, IMAGE_READER_AGENT, resolveChatModel } from './opencode-setup'
 import { getHarnessEndpoint } from './test-harness'
-import type { ChatAttachment, ChatPartUpdate, ChatToolStatus } from '../../shared/types'
+import type { ChatAttachment, ChatModelTier, ChatPartUpdate, ChatToolStatus } from '../../shared/types'
 
 /**
  * AI chat backed by a headless OpenCode server (https://opencode.ai).
@@ -557,8 +557,9 @@ function api<T>(srv: OpencodeServer, method: string, path: string, body?: unknow
 /**
  * The most common first-run failure is a configured model whose provider has
  * no credentials (OpenCode then 500s with an opaque "UnknownError"). Check
- * proactively — the main model AND the subagents' image model, which may use
- * its own provider — and explain exactly how to fix it.
+ * proactively — both chat models (the dropdown can route any message to
+ * either) AND the subagents' image model, each of which may use its own
+ * provider — and explain exactly how to fix it.
  */
 async function assertProviderAvailable(srv: OpencodeServer): Promise<void> {
   if (srv.providerChecked) return
@@ -572,6 +573,9 @@ async function assertProviderAvailable(srv: OpencodeServer): Promise<void> {
     const wanted = new Set<string>()
     for (const ref of [config.model, ...Object.values(config.agent ?? {}).map((a) => a?.model)]) {
       if (typeof ref === 'string' && ref.includes('/')) wanted.add(ref.split('/')[0])
+    }
+    for (const tier of ['medium', 'large'] as const) {
+      wanted.add((await resolveChatModel(tier)).providerID)
     }
     if (wanted.size) {
       const list = await api<{ providers: { id: string }[] }>(srv, 'GET', '/config/providers')
@@ -658,6 +662,10 @@ const RESUME_NUDGE =
  * accepted; progress streams via chat:part events and completion (or failure)
  * arrives as a chat:done event when the blocking POST returns.
  *
+ * `tier` picks which chat model answers this message. It rides the message
+ * POST as an explicit model override, so switching tiers mid-conversation
+ * keeps the same session — the model changes, the history doesn't.
+ *
  * `isRetry` marks the internal second attempt after a context-overflow
  * rollover: it keeps the turn claimed (busy stays true, so the renderer sees
  * one seamless turn) and must never recurse again.
@@ -666,6 +674,7 @@ export async function sendChatMessage(
   message: string,
   projectPath: string,
   attachments: ChatAttachment[] = [],
+  tier: ChatModelTier = 'medium',
   isRetry = false
 ): Promise<void> {
   if (!isRetry) {
@@ -715,6 +724,9 @@ export async function sendChatMessage(
   // Parts of finished turns are final — only the live turn needs delta state.
   partCache.clear()
   const currentSession = sessionID
+  // The chat model for this turn, resolved now so a mid-turn settings save
+  // can't split one turn across models (the resume nudges reuse it too).
+  const model = await resolveChatModel(tier)
 
   // Image attachments are additionally saved under .opengenie/attachments/
   // and their paths appended to the message: the main coding model may not
@@ -784,6 +796,7 @@ export async function sendChatMessage(
       let reply: any
       for (let attempt = 0; ; attempt++) {
         reply = await api<any>(srv, 'POST', `/session/${currentSession}/message`, {
+          model,
           parts: attempt ? [{ type: 'text', text: RESUME_NUDGE }] : parts
         })
         const detail = turnError(reply)
@@ -846,7 +859,7 @@ export async function sendChatMessage(
       })
     } finally {
       if (retryInFreshSession) {
-        void sendChatMessage(message, projectPath, attachments, true).catch((err) => {
+        void sendChatMessage(message, projectPath, attachments, tier, true).catch((err) => {
           // The retry failed before its own turn could report — close out the
           // renderer's pending turn here or the chat would spin forever.
           sendToRenderer('chat:done', {

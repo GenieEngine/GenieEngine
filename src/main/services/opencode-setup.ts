@@ -1,45 +1,68 @@
-import { existsSync } from 'node:fs'
 import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import type { SetupRequest, SetupStatus } from '../../shared/types'
+import type {
+  ChatModelTier,
+  ModelSlotRequest,
+  ModelSlotStatus,
+  ReasoningEffort,
+  SetupRequest,
+  SetupStatus,
+  ThinkingMode
+} from '../../shared/types'
+import { getChatModelRefs, setChatModelRefs } from '../state'
 import { isGptImageConfigured, saveGptImageConfig } from './gptimage'
 import { isHy3dConfigured, saveHy3dCredentials } from './hy3d'
 import { shutdownChat } from './opencode'
 
 /**
- * Provider setup for the AI chat, which runs as a small agent team:
+ * Provider setup for the AI chat, which runs as a small agent team over
+ * THREE configurable model slots:
  *
- *  - the MAIN coding agent (OpenCode's default `build` agent) plans and edits
- *    the game. Its model is the global `model` in the OpenCode config and
- *    needs no image support.
- *  - two SUBAGENTS declared under `agent` in the same config, both running a
- *    separately configurable IMAGE-ENABLED model:
+ *  - MEDIUM — the everyday chat/coding model. It is the default for chat
+ *    messages and doubles as the global `model` in the OpenCode config, so
+ *    OpenCode sessions started outside the app match the app's default.
+ *  - LARGE — a heavyweight chat model for tough tasks; the user switches to
+ *    it per-conversation from the chat box. Both chat models are named
+ *    explicitly on every message the app sends (see sendChatMessage), which
+ *    is what lets one conversation continue seamlessly across a switch.
+ *  - IMAGE — the image-enabled model behind the two subagents declared under
+ *    `agent` in the same config:
  *      · image-reader — describes image files (user-uploaded references,
- *        generated art) to the main agent, which may not see images itself;
+ *        generated art) to the chat agent, which may not see images itself;
  *      · game-tester  — plays the game via the opengenie MCP tools and
  *        verifies the screenshots it takes.
  *
- * Each of the two models has its own endpoint + API key. The key goes into
- * OpenCode's credential store (auth.json, same file `opencode auth login`
- * writes); endpoint + model go into the global OpenCode config. OpenRouter
- * endpoints map to OpenCode's built-in `openrouter` provider (keeping
- * models.dev metadata like image/tool-call support); other endpoints are
- * written as openai-compatible provider entries — `custom` for the main
- * model, `image` for the image model — each with its own credential slot.
- * When both models point at the same endpoint they share one provider and
- * one key.
+ * Every slot has its own endpoint + API key. Keys go into OpenCode's
+ * credential store (auth.json, the same file `opencode auth login` writes);
+ * endpoints + models go into the global OpenCode config. Chat slots on the
+ * OpenRouter endpoint map to OpenCode's built-in `openrouter` provider
+ * (keeping models.dev metadata like context limits and reasoning support);
+ * chat slots on other endpoints get openai-compatible provider entries under
+ * the STABLE ids `medium` / `large`.
+ *
+ * The image slot ALWAYS uses its own `image` provider entry — even on
+ * OpenRouter, where the chat slots use the built-in provider. Earlier
+ * versions derived the image slot's provider from a comparison with the chat
+ * endpoint, which aliased both models onto one credential: updating the chat
+ * key silently overwrote the image key, and changing the chat endpoint
+ * stranded the image credential entirely. A fixed per-slot id makes that
+ * impossible. "Leave the key blank to reuse the chat key" still works, but
+ * as a COPY into the slot's own credential at save time, never as sharing.
  */
 
 export const DEFAULT_ENDPOINT = 'https://openrouter.ai/api/v1'
-export const DEFAULT_MODEL = 'z-ai/glm-5.2'
+export const DEFAULT_MEDIUM_MODEL = 'deepseek/deepseek-v4-pro'
+export const DEFAULT_LARGE_MODEL = 'z-ai/glm-5.2'
 export const DEFAULT_IMAGE_MODEL = 'moonshotai/kimi-k2.7-code'
 
 /** Provider id OpenCode's built-in OpenRouter support registers under. */
 const OPENROUTER_PROVIDER = 'openrouter'
-/** Provider id for a user-supplied OpenAI-compatible main-model endpoint. */
-const CUSTOM_PROVIDER = 'custom'
-/** Provider id for the image model when it uses its own non-OpenRouter endpoint. */
+/** Provider id older versions used for a custom main-model endpoint (read for migration only). */
+const LEGACY_CUSTOM_PROVIDER = 'custom'
+/** Stable per-slot provider ids for models on non-OpenRouter endpoints (chat) / any endpoint (image). */
+const MEDIUM_PROVIDER = 'medium'
+const LARGE_PROVIDER = 'large'
 const IMAGE_PROVIDER = 'image'
 
 export const IMAGE_READER_AGENT = 'image-reader'
@@ -85,6 +108,44 @@ function isOpenRouterEndpoint(endpoint: string): boolean {
 /** A custom-provider entry in the OpenCode config's `provider` map. */
 interface ProviderEntry extends Record<string, unknown> {
   options?: { baseURL?: string }
+  models?: Record<string, Record<string, unknown>>
+}
+
+const THINKING_MODES: ThinkingMode[] = ['default', 'enabled', 'disabled']
+const REASONING_EFFORTS: ReasoningEffort[] = ['default', 'low', 'medium', 'high', 'xhigh', 'max']
+
+/** Untrusted / stored values → a valid union member ('default' = absent). */
+function coerceThinking(value: unknown): ThinkingMode {
+  return THINKING_MODES.includes(value as ThinkingMode) ? (value as ThinkingMode) : 'default'
+}
+function coerceEffort(value: unknown): ReasoningEffort {
+  return REASONING_EFFORTS.includes(value as ReasoningEffort) ? (value as ReasoningEffort) : 'default'
+}
+
+/**
+ * A slot's thinking/effort choices as per-model `options` for the OpenCode
+ * config, or null when both are 'default' (nothing is sent, the model keeps
+ * its own defaults). On the wire both spellings become the standard
+ * OpenAI-format request fields `thinking: {"type": ...}` / `reasoning_effort`
+ * (per https://api-docs.deepseek.com/guides/thinking_mode/) — but the
+ * spelling OpenCode wants differs per provider package (probed against the
+ * bundled OpenCode 1.17.13):
+ *
+ *  - @ai-sdk/openai-compatible passes `thinking` through verbatim and maps
+ *    camelCase `reasoningEffort` → `reasoning_effort` (verbatim snake_case is
+ *    dropped);
+ *  - @openrouter/ai-sdk-provider (the built-in `openrouter` provider) passes
+ *    both keys through verbatim, so snake_case is required.
+ */
+function wireOptions(
+  thinking: ThinkingMode,
+  effort: ReasoningEffort,
+  pkg: 'openrouter' | 'openai-compatible'
+): Record<string, unknown> | null {
+  const options: Record<string, unknown> = {}
+  if (thinking !== 'default') options.thinking = { type: thinking }
+  if (effort !== 'default') options[pkg === 'openrouter' ? 'reasoning_effort' : 'reasoningEffort'] = effort
+  return Object.keys(options).length ? options : null
 }
 
 function providerEntries(config: Record<string, unknown>): Record<string, ProviderEntry> {
@@ -101,6 +162,29 @@ export function configuredImageModel(config: Record<string, unknown>): string {
   return typeof current === 'string' && current
     ? current
     : `${OPENROUTER_PROVIDER}/${DEFAULT_IMAGE_MODEL}`
+}
+
+/**
+ * The stored `provider/model` ref for a chat tier: the app settings first,
+ * then the legacy single `config.model` (versions before the Medium/Large
+ * split had one main model — presenting it as both tiers keeps an upgraded
+ * install behaving exactly as before until the user picks new models), then
+ * the tier's default.
+ */
+function chatModelRef(tier: ChatModelTier, config: Record<string, unknown>): string {
+  const stored = getChatModelRefs()[tier]
+  if (stored) return stored
+  if (typeof config.model === 'string' && config.model) return config.model
+  return `${OPENROUTER_PROVIDER}/${tier === 'large' ? DEFAULT_LARGE_MODEL : DEFAULT_MEDIUM_MODEL}`
+}
+
+/**
+ * The model a chat turn should run on, as the message API wants it. Resolved
+ * per send (not cached) so a settings save applies to the very next message.
+ */
+export async function resolveChatModel(tier: ChatModelTier): Promise<{ providerID: string; modelID: string }> {
+  const { provider, model } = splitModel(chatModelRef(tier, await readJson(configPath())))
+  return { providerID: provider, modelID: model }
 }
 
 /**
@@ -233,24 +317,56 @@ export async function getSetupStatus(): Promise<SetupStatus> {
   const endpointOf = (provider: string): string =>
     providers[provider]?.options?.baseURL || DEFAULT_ENDPOINT
 
-  const modelField =
-    typeof config.model === 'string' && config.model
-      ? config.model
-      : `${OPENROUTER_PROVIDER}/${DEFAULT_MODEL}`
-  const { provider, model } = splitModel(modelField)
-  const { provider: imageProvider, model: imageModel } = splitModel(configuredImageModel(config))
+  const slotStatus = (ref: string): ModelSlotStatus => {
+    const { provider, model } = splitModel(ref)
+    // Thinking/effort live on the model's declaration; either spelling of the
+    // effort key may be stored depending on the provider package (see
+    // wireOptions), and absence means 'default'.
+    const options = (providers[provider]?.models?.[model]?.options ?? {}) as Record<string, unknown>
+    return {
+      endpoint: endpointOf(provider),
+      model,
+      configured: hasCredential(provider),
+      thinking: coerceThinking((options.thinking as { type?: unknown } | undefined)?.type),
+      effort: coerceEffort(options.reasoningEffort ?? options.reasoning_effort)
+    }
+  }
+
+  const medium = slotStatus(chatModelRef('medium', config))
+  const large = slotStatus(chatModelRef('large', config))
+  const image = slotStatus(configuredImageModel(config))
 
   return {
-    configured: hasCredential(provider),
-    endpoint: endpointOf(provider),
-    model,
-    imageConfigured: hasCredential(imageProvider),
-    imageEndpoint: endpointOf(imageProvider),
-    imageModel,
+    // The chat dropdown can route any message to either chat model, so the
+    // chat only counts as connected once both have usable credentials.
+    configured: medium.configured && large.configured,
+    medium,
+    large,
+    image,
     hy3dConfigured: await isHy3dConfigured(),
     gptImageConfigured: await isGptImageConfigured()
   }
 }
+
+/** One model slot's settings resolved against defaults and stored state. */
+interface ResolvedSlot {
+  id: 'medium' | 'large' | 'image'
+  title: string
+  endpoint: string
+  model: string
+  /** The stable provider id this slot writes to from now on. */
+  providerId: string
+  /** Where the slot's credential lived before this save (for migration). */
+  prevProviderId: string
+  /** The model the slot pointed at before this save (for option cleanup). */
+  prevModel: string
+  typedKey: string
+  thinking: ThinkingMode
+  effort: ReasoningEffort
+}
+
+/** An auth.json entry, copied verbatim when a credential moves or is shared. */
+type AuthEntry = Record<string, unknown>
 
 export async function saveSetup(request: SetupRequest): Promise<void> {
   // Optional asset-generation credentials: only touch a stored credential
@@ -261,90 +377,183 @@ export async function saveSetup(request: SetupRequest): Promise<void> {
   }
   await saveGptImageConfig(request.openaiApiKey ?? '')
 
-  const endpoint = request.endpoint.trim() || DEFAULT_ENDPOINT
-  const model = request.model.trim() || DEFAULT_MODEL
-  const imageEndpoint = request.imageEndpoint.trim() || DEFAULT_ENDPOINT
-  const imageModel = request.imageModel.trim() || DEFAULT_IMAGE_MODEL
+  const configFile = configPath()
+  await mkdir(join(configFile, '..'), { recursive: true })
+  const config = await readJson(configFile)
 
-  const mainProvider = isOpenRouterEndpoint(endpoint) ? OPENROUTER_PROVIDER : CUSTOM_PROVIDER
-  // Same endpoint → same provider and credential slot as the main model (one
-  // key covers both, matching the "leave the image key blank" flow in the
-  // setup panel). A separate endpoint gets its own provider + key slot.
-  const imageProvider =
-    imageEndpoint === endpoint
-      ? mainProvider
-      : isOpenRouterEndpoint(imageEndpoint)
-        ? OPENROUTER_PROVIDER
-        : IMAGE_PROVIDER
+  const resolve = (
+    id: ResolvedSlot['id'],
+    title: string,
+    req: ModelSlotRequest,
+    defaultModel: string,
+    prevRef: string
+  ): ResolvedSlot => {
+    const endpoint = req.endpoint.trim() || DEFAULT_ENDPOINT
+    const previous = splitModel(prevRef)
+    return {
+      id,
+      title,
+      endpoint,
+      model: req.model.trim() || defaultModel,
+      // Chat slots on OpenRouter use the built-in provider (models.dev
+      // metadata); anywhere else they get their own stable id. The image
+      // slot's id is ALWAYS its own — see the module comment for why.
+      providerId:
+        id === 'image' ? IMAGE_PROVIDER : isOpenRouterEndpoint(endpoint) ? OPENROUTER_PROVIDER : id,
+      prevProviderId: previous.provider,
+      prevModel: previous.model,
+      typedKey: req.apiKey.trim(),
+      thinking: coerceThinking(req.thinking),
+      effort: coerceEffort(req.effort)
+    }
+  }
+  // Order matters twice below: auth writes (first typed key into a shared
+  // provider wins) and key sharing (earlier slots donate to later ones).
+  const slots = [
+    resolve('medium', 'Medium model endpoint', request.medium, DEFAULT_MEDIUM_MODEL, chatModelRef('medium', config)),
+    resolve('large', 'Large model endpoint', request.large, DEFAULT_LARGE_MODEL, chatModelRef('large', config)),
+    resolve('image', 'Image model endpoint', request.image, DEFAULT_IMAGE_MODEL, configuredImageModel(config))
+  ]
+  const [medium, large, image] = slots
 
-  // 1. Credentials → auth.json (only when a key was provided; the user may
-  //    just be changing a model with keys already stored). When both models
-  //    share a provider, the image key intentionally wins — same account.
-  const keys: [string, string][] = []
-  if (request.apiKey.trim()) keys.push([mainProvider, request.apiKey.trim()])
-  if (request.imageApiKey.trim()) keys.push([imageProvider, request.imageApiKey.trim()])
-  if (keys.length) {
+  // 1. Credentials → auth.json. Each slot resolves to its OWN entry so no
+  //    save can clobber another slot's key (the old shared-slot scheme let a
+  //    chat-key update wipe the image credential):
+  //     a. a key typed this save wins (first writer for a shared chat id);
+  //     b. else an entry already stored under the slot's id is kept as-is;
+  //     c. else the entry under the slot's PREVIOUS id is copied over — the
+  //        credential follows the slot when its provider id changes but its
+  //        endpoint doesn't (upgrade from the legacy `custom` id, image
+  //        moving off `openrouter`), instead of being stranded under the old
+  //        id. Not on an endpoint change: the old key belongs to the old
+  //        service, so the slot must get a fresh key (typed or shared);
+  //     d. else a same-endpoint slot's entry is copied — the "leave blank to
+  //        use the Medium key" flow, as a copy rather than an alias.
+  const auth = await readJson(authPath())
+  const pendingAuth = new Map<string, AuthEntry>()
+  const entryFor = (providerId: string): AuthEntry | undefined =>
+    pendingAuth.get(providerId) ?? (auth[providerId] as AuthEntry | undefined)
+  const hasCredential = (providerId: string): boolean =>
+    !!entryFor(providerId) || !!process.env[providerEnvVar(providerId)]
+  // What a provider id served BEFORE this save (the entries are rebuilt below).
+  const endpointBefore = (providerId: string): string =>
+    providerEntries(config)[providerId]?.options?.baseURL || DEFAULT_ENDPOINT
+
+  for (const slot of slots) {
+    if (slot.typedKey) {
+      if (!pendingAuth.has(slot.providerId)) pendingAuth.set(slot.providerId, { type: 'api', key: slot.typedKey })
+      continue
+    }
+    if (hasCredential(slot.providerId)) continue
+    const previous = entryFor(slot.prevProviderId)
+    if (previous && endpointBefore(slot.prevProviderId) === slot.endpoint) {
+      pendingAuth.set(slot.providerId, { ...previous })
+    }
+  }
+  for (const slot of slots) {
+    if (hasCredential(slot.providerId)) continue
+    for (const donor of slots) {
+      if (donor === slot || donor.endpoint !== slot.endpoint) continue
+      const donated = entryFor(donor.providerId)
+      if (donated) {
+        pendingAuth.set(slot.providerId, { ...donated })
+        break
+      }
+    }
+  }
+  if (pendingAuth.size) {
     const path = authPath()
     await mkdir(join(path, '..'), { recursive: true })
-    const auth = await readJson(path)
-    for (const [providerId, key] of keys) auth[providerId] = { type: 'api', key }
+    for (const [providerId, entry] of pendingAuth) auth[providerId] = entry
     await writeFile(path, JSON.stringify(auth, null, 2))
     await chmod(path, 0o600) // credentials — owner-only
   }
 
-  // 2. Endpoints + models + agents → global OpenCode config (preserving mcp etc.).
-  const configFile = configPath()
-  await mkdir(join(configFile, '..'), { recursive: true })
-  const config = await readJson(configFile)
-  config.model = `${mainProvider}/${model}`
+  // 2. Endpoints + models + agents → global OpenCode config (preserving mcp
+  //    etc.). config.model tracks the Medium slot: it's the app's default
+  //    tier, and it keeps `opencode` runs outside the app on the same model
+  //    (in-app sends name their model explicitly per message).
+  config.model = `${medium.providerId}/${medium.model}`
+  setChatModelRefs({
+    medium: `${medium.providerId}/${medium.model}`,
+    large: `${large.providerId}/${large.model}`
+  })
 
   const providers = providerEntries(config)
   // Rebuild our provider entries from scratch so stale ones can't shadow
-  // anything or confuse a later status read (built-in OpenRouter needs none).
-  delete providers[CUSTOM_PROVIDER]
+  // anything or confuse a later status read (built-in OpenRouter needs none;
+  // `custom` is the pre-Medium/Large id and only ever needs cleaning up).
+  delete providers[LEGACY_CUSTOM_PROVIDER]
+  delete providers[MEDIUM_PROVIDER]
+  delete providers[LARGE_PROVIDER]
   delete providers[IMAGE_PROVIDER]
-  // Models on custom endpoints aren't in models.dev, so they must be declared.
-  // The image model additionally declares image input — without it OpenCode
-  // assumes an unknown model can't see and strips image parts before they
-  // ever reach the subagents.
-  const imageModelDecl = {
-    name: imageModel,
-    attachment: true,
-    modalities: { input: ['text', 'image'], output: ['text'] }
-  }
-  if (mainProvider === CUSTOM_PROVIDER) {
-    providers[CUSTOM_PROVIDER] = {
+  for (const slot of slots) {
+    if (slot.providerId === OPENROUTER_PROVIDER) continue
+    const options = wireOptions(slot.thinking, slot.effort, 'openai-compatible')
+    providers[slot.providerId] = {
       npm: '@ai-sdk/openai-compatible',
-      name: 'Custom endpoint',
-      options: { baseURL: endpoint },
+      name: slot.title,
+      options: { baseURL: slot.endpoint },
+      // Models on openai-compatible entries aren't in models.dev, so they
+      // must be declared. The image model additionally declares image input —
+      // without it OpenCode assumes an unknown model can't see and strips
+      // image parts before they ever reach the subagents.
       models: {
-        [model]: { name: model },
-        // Shared custom endpoint: the image model rides the same provider.
-        ...(imageProvider === CUSTOM_PROVIDER ? { [imageModel]: imageModelDecl } : {})
+        [slot.model]: {
+          name: slot.model,
+          ...(slot.id === 'image'
+            ? { attachment: true, modalities: { input: ['text', 'image'], output: ['text'] } }
+            : {}),
+          ...(options ? { options } : {})
+        }
       }
     }
   }
-  if (imageProvider === IMAGE_PROVIDER) {
-    providers[IMAGE_PROVIDER] = {
-      npm: '@ai-sdk/openai-compatible',
-      name: 'Image model endpoint',
-      options: { baseURL: imageEndpoint },
-      models: { [imageModel]: imageModelDecl }
-    }
+
+  // Chat slots on the built-in `openrouter` provider carry their
+  // thinking/effort options on a partial provider entry merged over the
+  // built-in one. The entry may hold the user's own customizations, so only
+  // the two managed keys of models our slots point (or pointed) at are
+  // touched: strip them everywhere first, then write the current choices.
+  // Two slots on the same OpenRouter model share one declaration — the later
+  // slot (Large) wins, since per-model options can't differ per message.
+  const managedKeys = ['thinking', 'reasoning_effort']
+  const managedModels = new Set<string>()
+  for (const slot of slots) {
+    if (slot.prevProviderId === OPENROUTER_PROVIDER) managedModels.add(slot.prevModel)
+    if (slot.providerId === OPENROUTER_PROVIDER) managedModels.add(slot.model)
   }
+  const openrouterModels = providers[OPENROUTER_PROVIDER]?.models
+  if (openrouterModels) {
+    for (const modelId of managedModels) {
+      const declaration = openrouterModels[modelId]
+      const options = declaration?.options as Record<string, unknown> | undefined
+      if (!options) continue
+      for (const key of managedKeys) delete options[key]
+      if (!Object.keys(options).length) delete declaration.options
+      if (!Object.keys(declaration).length) delete openrouterModels[modelId]
+    }
+    if (!Object.keys(openrouterModels).length) delete providers[OPENROUTER_PROVIDER]?.models
+    if (!Object.keys(providers[OPENROUTER_PROVIDER] ?? { keep: 1 }).length) delete providers[OPENROUTER_PROVIDER]
+  }
+  for (const slot of slots) {
+    if (slot.providerId !== OPENROUTER_PROVIDER) continue
+    const options = wireOptions(slot.thinking, slot.effort, 'openrouter')
+    if (!options) continue
+    const entry = (providers[OPENROUTER_PROVIDER] ??= {})
+    const models = (entry.models ??= {})
+    const declaration = (models[slot.model] ??= {})
+    declaration.options = { ...(declaration.options as Record<string, unknown> | undefined), ...options }
+  }
+
   if (Object.keys(providers).length) config.provider = providers
   else delete config.provider
 
-  applyAgentConfig(config, `${imageProvider}/${imageModel}`)
+  applyAgentConfig(config, `${image.providerId}/${image.model}`)
 
   if (!config.$schema) config.$schema = 'https://opencode.ai/config.json'
   await writeFile(configFile, JSON.stringify(config, null, 2))
 
   // 3. Drop the stale chat server so the next message picks up the new config.
   shutdownChat()
-}
-
-/** Whether a provider currently has a stored credential (used by the pre-send guard). */
-export function authFileExists(): boolean {
-  return existsSync(authPath())
 }

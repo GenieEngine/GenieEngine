@@ -4,7 +4,12 @@ All notable changes to OpenGenie are documented here.
 
 ## [Unreleased]
 
+### Added
+- The chat agent now runs on two configurable models instead of one: Medium (default: deepseek/deepseek-v4-pro) for everyday work, and Large (default: z-ai/glm-5.2) for tough tasks that need extra juice but may cost more. A dropdown in the chat box switches between them mid-conversation — the full chat history carries over. The image / game-testing model stays its own separate configuration (default: moonshotai/kimi-k2.7-code)
+- Every model in the AI settings can now set Thinking (enabled/disabled) and Reasoning effort (low/medium/high/xhigh/max), sent with each request as the standard OpenAI-format `thinking` / `reasoning_effort` fields; the default sends nothing and leaves the model on its own behavior
+
 ### Fixed
+- Updating the chat model's API key silently overwrote the image model's stored key whenever both models pointed at the same endpoint (they shared one credential slot), and changing the chat endpoint could strand the image credential entirely. Every model now keeps its own credential slot; leaving a key blank to share another section's key copies it instead of aliasing it
 - The game-testing subagent could probe a game for 10+ minutes behind a motionless chat, looking hung until the user cancelled. AI test runs now have a per-run budget (~40 game tool calls / 8 minutes) with an early wrap-up warning, and subagent tool activity is shown live in the chat as labelled chips
 - Test screenshots are now downscaled to 1024-wide JPEGs before being sent to the model — full-size retina PNGs accumulating in the test conversation made every step slower and could exceed the provider's request-size limit mid-run (the on-disk copy stays full resolution)
 

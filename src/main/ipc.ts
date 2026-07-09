@@ -1,5 +1,5 @@
 import { dialog, ipcMain } from 'electron'
-import type { ChatAttachment, GameInputEvent, GitChange, InitialState, ProjectInfo, Result, SetupRequest, StageRect } from '../shared/types'
+import type { ChatAttachment, ChatModelTier, GameInputEvent, GitChange, InitialState, ProjectInfo, Result, SetupRequest, StageRect } from '../shared/types'
 import { normalizeGodotPath, resolveGodot, resolveOpencode } from './services/binaries'
 import { scanEcs } from './services/ecs'
 import * as files from './services/files'
@@ -133,8 +133,9 @@ export function registerIpcHandlers(): void {
   })
 
   // ---- AI chat ---------------------------------------------------------------
-  handle('chat:send', (message: string, attachments?: ChatAttachment[]) =>
-    sendChatMessage(message, requireProject().path, attachments ?? [])
+  // The tier is renderer input — anything but 'large' falls back to 'medium'.
+  handle('chat:send', (message: string, attachments?: ChatAttachment[], tier?: ChatModelTier) =>
+    sendChatMessage(message, requireProject().path, attachments ?? [], tier === 'large' ? 'large' : 'medium')
   )
   handle('chat:cancel', () => cancelChat())
   // /clear: fresh conversation and the saved transcript is forgotten (the

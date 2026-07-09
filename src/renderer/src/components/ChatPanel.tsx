@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type {
   AssetPreview,
   ChatAttachment,
+  ChatModelTier,
   ChatPartUpdate,
   ChatQuestionRequest,
   ChatToolStatus
@@ -154,6 +155,18 @@ const SUGGESTIONS = [
   'Make a 2D platformer with a player that moves and jumps',
   'Add a score counter to the screen',
   'Give the game a title screen with a start button'
+]
+
+/**
+ * The chat model picker (persisted app-wide, like the sidebar width). Both
+ * tiers continue the same conversation — the model named on each message is
+ * the only thing that changes — so switching mid-chat loses nothing.
+ */
+const MODEL_TIER_KEY = 'opengenie:chatModelTier'
+
+const MODEL_TIERS: { id: ChatModelTier; label: string }[] = [
+  { id: 'medium', label: 'Medium' },
+  { id: 'large', label: 'Large' }
 ]
 
 interface SlashCommand {
@@ -436,6 +449,15 @@ export function ChatPanel({ projectPath, opencodeAvailable, onAssistantDone }: P
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)
+  // Which chat model answers the next message (Medium = everyday, Large =
+  // tough tasks). Applies from the next send; an in-flight turn is unaffected.
+  const [modelTier, setModelTier] = useState<ChatModelTier>(() =>
+    localStorage.getItem(MODEL_TIER_KEY) === 'large' ? 'large' : 'medium'
+  )
+  const pickModelTier = (tier: ChatModelTier): void => {
+    localStorage.setItem(MODEL_TIER_KEY, tier)
+    setModelTier(tier)
+  }
   const [slashIndex, setSlashIndex] = useState(0)
   const [slashDismissed, setSlashDismissed] = useState(false)
   const [attachments, setAttachments] = useState<ChatAttachment[]>([])
@@ -728,7 +750,7 @@ export function ChatPanel({ projectPath, opencodeAvailable, onAssistantDone }: P
       { id: crypto.randomUUID(), role: 'user', content: message, attachments: outgoing }
     ])
     setStreaming(true)
-    const result = await window.api.chatSend(message, outgoing)
+    const result = await window.api.chatSend(message, outgoing, modelTier)
     if (!result.ok) {
       setStreaming(false)
       setMessages((msgs) => [...msgs, { id: crypto.randomUUID(), role: 'error', content: result.error }])
@@ -1028,21 +1050,36 @@ export function ChatPanel({ projectPath, opencodeAvailable, onAssistantDone }: P
                 e.target.value = ''
               }}
             />
-            <div className="attach-btns">
-              <button
-                className="attach-btn"
-                title="Attach files, images, or .zip asset packs — or drag & drop them (folders too) into the chat"
-                onClick={() => fileInputRef.current?.click()}
+            <div className="inputbar-tools">
+              <div className="attach-btns">
+                <button
+                  className="attach-btn"
+                  title="Attach files, images, or .zip asset packs — or drag & drop them (folders too) into the chat"
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  <PlusIcon size={14} />
+                </button>
+                <button
+                  className="attach-btn"
+                  title="Attach a folder of assets — uploaded for the assistant when you send"
+                  onClick={() => void attachFolder()}
+                >
+                  <FolderIcon size={13} />
+                </button>
+              </div>
+              <select
+                className="model-select"
+                value={modelTier}
+                title="Which chat model answers — Medium for everyday work, Large for tough tasks that need extra juice (may cost more). The conversation continues either way."
+                aria-label="Chat model"
+                onChange={(e) => pickModelTier(e.target.value === 'large' ? 'large' : 'medium')}
               >
-                <PlusIcon size={14} />
-              </button>
-              <button
-                className="attach-btn"
-                title="Attach a folder of assets — uploaded for the assistant when you send"
-                onClick={() => void attachFolder()}
-              >
-                <FolderIcon size={13} />
-              </button>
+                {MODEL_TIERS.map(({ id, label }) => (
+                  <option key={id} value={id}>
+                    {label}
+                  </option>
+                ))}
+              </select>
             </div>
             {streaming ? (
               <button className="send-btn stop" title="Stop" onClick={() => void window.api.chatCancel()}>
