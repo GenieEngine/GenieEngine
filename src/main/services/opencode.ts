@@ -11,7 +11,7 @@ import { loadTranscriptRecap, saveChatAttachments, saveChatUploads, type SavedUp
 // Benign import cycles (opencode-setup and opencode-config → opencode-setup
 // import shutdownChat): all sides only use the other's exports at call time,
 // never during module evaluation.
-import { opengenieMcpEntry } from './opencode-config'
+import { agentInstructionsPath, opengenieMcpEntry } from './opencode-config'
 import { GAME_TESTER_AGENT, IMAGE_READER_AGENT, resolveChatModel } from './opencode-setup'
 import { getHarnessEndpoint } from './test-harness'
 import type { ChatAttachment, ChatModelTier, ChatPartUpdate, ChatToolStatus } from '../../shared/types'
@@ -461,6 +461,14 @@ async function ensureServer(projectPath: string): Promise<OpencodeServer> {
   // the spawned server always runs this instance's own bridge while the
   // user's other config keys survive.
   const mcpEntry = opengenieMcpEntry()
+  // The app-owned build rules ride the same per-spawn override. `instructions`
+  // is the one config key whose arrays concatenate across layers instead of
+  // replacing, so this adds to whatever the user configured globally.
+  const instructions = agentInstructionsPath()
+  const configContent = {
+    ...(mcpEntry ? { mcp: { opengenie: mcpEntry } } : {}),
+    ...(instructions ? { instructions: [instructions] } : {})
+  }
   const { command, args } = sandboxCommand(
     opencode,
     ['serve', '--port', String(port), '--hostname', '127.0.0.1'],
@@ -480,7 +488,9 @@ async function ensureServer(projectPath: string): Promise<OpencodeServer> {
       ...(harness
         ? { OPENGENIE_HARNESS_PORT: String(harness.port), OPENGENIE_HARNESS_TOKEN: harness.token }
         : {}),
-      ...(mcpEntry ? { OPENCODE_CONFIG_CONTENT: JSON.stringify({ mcp: { opengenie: mcpEntry } }) } : {})
+      ...(Object.keys(configContent).length
+        ? { OPENCODE_CONFIG_CONTENT: JSON.stringify(configContent) }
+        : {})
     },
     stdio: ['ignore', 'pipe', 'pipe']
   })

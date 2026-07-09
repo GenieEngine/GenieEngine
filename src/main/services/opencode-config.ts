@@ -39,11 +39,41 @@ import { applyAgentConfig, configuredImageModel } from './opencode-setup'
  *    instance's sandbox can't read — which silently killed the bridge and
  *    all game tools. The override keeps each server on its own bridge.
  */
+/**
+ * Absolute path of a file in the app's resources/ folder: the checkout's
+ * resources/ in development, the asar-unpacked copy in packaged builds
+ * (asarUnpack covers resources/**, so external processes like the OpenCode
+ * server can read these files directly). Null when missing — broken install.
+ */
+function bundledResource(name: string): string | null {
+  const path = app.isPackaged
+    ? join(process.resourcesPath, 'app.asar.unpacked', 'resources', name)
+    : join(app.getAppPath(), 'resources', name)
+  return existsSync(path) ? path : null
+}
+
+/**
+ * The app-owned build rules (scope, ECS architecture, asset layout, file
+ * headers, testing) injected into every app-spawned chat server via the
+ * `instructions` config key — OpenCode loads the file into the system prompt
+ * the same way it loads the project's AGENTS.md. They live here rather than
+ *
+ *  - in the project's AGENTS.md, which is a creation-time snapshot that would
+ *    go stale as the app updates (projects.ts upgrades old fat copies), or
+ *  - in the global config file, where they would leak Godot-game policy into
+ *    the user's unrelated terminal OpenCode sessions.
+ *
+ * Safe to pass per spawn: `instructions` arrays concatenate across config
+ * layers (unlike other arrays, which replace), so instructions the user
+ * configured themselves survive.
+ */
+export function agentInstructionsPath(): string | null {
+  return bundledResource('agent-instructions.md')
+}
+
 export function opengenieMcpEntry(): Record<string, unknown> | null {
-  const bridgePath = app.isPackaged
-    ? join(process.resourcesPath, 'app.asar.unpacked', 'resources', 'mcp-bridge.mjs')
-    : join(app.getAppPath(), 'resources', 'mcp-bridge.mjs')
-  if (!existsSync(bridgePath)) return null
+  const bridgePath = bundledResource('mcp-bridge.mjs')
+  if (!bridgePath) return null
   return {
     type: 'local',
     command: [process.execPath, bridgePath],

@@ -262,9 +262,9 @@ export type ExportProgress =
   | { phase: 'done'; message?: string }
 
 /**
- * A code file with a parsed `#=== opengenie ===` header block (the format
- * AGENTS.md mandates for every file the AI writes — see templates.ts).
- * Backs the ECS viewer in the center pane.
+ * A code file with a parsed `#=== opengenie ===` header block (the format the
+ * injected agent instructions mandate for every file the AI writes — see
+ * resources/agent-instructions.md). Backs the ECS viewer in the center pane.
  */
 export interface EcsNode {
   /** Project-relative path, e.g. "components/c_health.gd". */

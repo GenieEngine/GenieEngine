@@ -4,9 +4,11 @@ import type { EcsNode } from '../../shared/types'
 
 /**
  * Scans a project for code files carrying the `#=== opengenie ===` header
- * block that AGENTS.md mandates (templates.ts documents the format as
- * load-bearing) and parses them into nodes for the ECS viewer. Files without
- * a header simply don't appear — the viewer shows the documented graph.
+ * block that the injected agent instructions mandate (the "File headers"
+ * section of resources/agent-instructions.md — change the format there and
+ * this parser in lockstep) and parses them into nodes for the ECS viewer.
+ * Files without a header simply don't appear — the viewer shows the
+ * documented graph.
  */
 
 const SKIP_DIRS = new Set(['exports', 'node_modules'])
