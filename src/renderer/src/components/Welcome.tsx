@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type { ProjectInfo } from '../../../shared/types'
 import logo from '../assets/logo.png'
 import { AdvancedToggle } from './AdvancedToggle'
+import { DiscordButton } from './DiscordButton'
 import { FolderIcon, GearIcon, PlusIcon } from './Icons'
 
 interface Props {
@@ -74,6 +75,7 @@ export function Welcome({
             <img src={logo} alt="" className="brand-mark-img big" /> GenieEngine
           </h1>
           <div className="welcome-head-actions">
+            <DiscordButton />
             <AdvancedToggle value={advancedMode} onChange={onToggleAdvancedMode} />
             <button
               className="icon-btn"
