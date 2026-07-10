@@ -1,7 +1,7 @@
 {
   "name": "genieengine",
   "productName": "GenieEngine",
-  "version": "0.1.1-alpha4",
+  "version": "0.1.1",
   "description": "AI-powered game engine — build games by chatting with an AI, powered by Godot under the hood.",
   "main": "out/main/index.js",
   "author": "Jared Zhao",
