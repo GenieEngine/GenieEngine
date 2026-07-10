@@ -1,7 +1,9 @@
 # GenieEngine
 
-[![Discord](https://img.shields.io/badge/Discord-Join%20the%20community-5865F2?logo=discord&logoColor=white)](https://discord.gg/BC8fF2nr4y)
-[![License: GPLv3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
+<p align="center">
+  <a href="https://discord.gg/BC8fF2nr4y"><img src="https://img.shields.io/badge/Discord-Join%20the%20community-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPLv3-blue?style=for-the-badge" alt="License: GPLv3"></a>
+</p>
 
 GenieEngine is an AI-powered game engine that lets anyone build a real video game by describing it
 in plain language. Games are real [Godot 4](https://godotengine.org) projects under the hood, and
