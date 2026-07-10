@@ -75,7 +75,6 @@ export function Welcome({
             <img src={logo} alt="" className="brand-mark-img big" /> GenieEngine
           </h1>
           <div className="welcome-head-actions">
-            <DiscordButton />
             <AdvancedToggle value={advancedMode} onChange={onToggleAdvancedMode} />
             <button
               className="icon-btn"
@@ -84,6 +83,7 @@ export function Welcome({
             >
               <GearIcon size={16} />
             </button>
+            <DiscordButton />
           </div>
         </div>
         <p className="tagline">The AI game engine. Describe your game — watch it come to life.</p>

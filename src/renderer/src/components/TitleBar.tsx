@@ -174,7 +174,6 @@ export function TitleBar({
             {status !== 'running' ? 'Starting…' : gameState.mode === 'test' ? 'AI testing' : 'Running'}
           </span>
         )}
-        {project && <DiscordButton />}
         {project && <AdvancedToggle value={advancedMode} onChange={onToggleAdvancedMode} />}
         {project && (
           <button
@@ -185,6 +184,7 @@ export function TitleBar({
             <GearIcon size={14} />
           </button>
         )}
+        {project && <DiscordButton />}
         {project && (
           <button className="btn btn-ghost btn-sm" title="Export your game" onClick={onExport}>
             <ShareIcon size={13} /> Export
