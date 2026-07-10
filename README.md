@@ -25,9 +25,9 @@ of Godot, which is a key technology that enables GenieEngine.
 
 | Platform | Download |
 | --- | --- |
-| macOS (Apple Silicon & Intel) | [OpenGenie.dmg](https://github.com/GenieEngine/GenieEngine/releases/download/v0.1.0/OpenGenie-0.1.0-arm64.dmg) |
-| Windows | [OpenGenie-Setup.exe](https://github.com/GenieEngine/GenieEngine/releases/download/v0.1.0/OpenGenie.Setup.0.1.0.exe) |  Note: I don't have a Windows machine, so this is untested
-| Linux | [OpenGenie.AppImage](https://github.com/GenieEngine/GenieEngine/releases/download/v0.1.0/OpenGenie-0.1.0.AppImage) |  Note: I don't have a Linux machine, so this is untested
+| macOS (Apple Silicon & Intel) | [OpenGenie.dmg](https://github.com/GenieEngine/GenieEngine/releases/download/v0.1.1/GenieEngine-0.1.1-arm64.dmg) |
+| Windows | [OpenGenie-Setup.exe](https://github.com/GenieEngine/GenieEngine/releases/download/v0.1.1/GenieEngine.Setup.0.1.1.exe) |  Note: I don't have a Windows machine, so this is untested
+| Linux | [OpenGenie.AppImage](https://github.com/GenieEngine/GenieEngine/releases/download/v0.1.1/GenieEngine-0.1.1.AppImage) |  Note: I don't have a Linux machine, so this is untested
 
 ## Why GenieEngine (vs. a coding agent like Claude Code)
 
