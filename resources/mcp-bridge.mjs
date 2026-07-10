@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 /**
- * MCP (Model Context Protocol) stdio server that exposes OpenGenie's game
+ * MCP (Model Context Protocol) stdio server that exposes GenieEngine's game
  * testing tools to OpenCode. It is a thin bridge: every tool call is
- * forwarded over HTTP to the running OpenGenie app. The app is discovered
- * via OPENGENIE_HARNESS_PORT/TOKEN env vars (set by the app on the OpenCode
+ * forwarded over HTTP to the running GenieEngine app. The app is discovered
+ * via GENIEENGINE_HARNESS_PORT/TOKEN env vars (set by the app on the OpenCode
  * server it spawns, inherited by this process — always the right instance),
- * falling back to harness.json in OpenGenie's userData directory for
+ * falling back to harness.json in GenieEngine's userData directory for
  * OpenCode sessions that weren't launched by the app.
  *
  * Spawned by OpenCode (registered in the global opencode config by the app)
@@ -21,20 +21,20 @@ import { createInterface } from 'node:readline'
 function userDataDir() {
   switch (process.platform) {
     case 'darwin':
-      return join(homedir(), 'Library', 'Application Support', 'OpenGenie')
+      return join(homedir(), 'Library', 'Application Support', 'GenieEngine')
     case 'win32':
-      return join(process.env.APPDATA ?? join(homedir(), 'AppData', 'Roaming'), 'OpenGenie')
+      return join(process.env.APPDATA ?? join(homedir(), 'AppData', 'Roaming'), 'GenieEngine')
     default:
-      return join(process.env.XDG_CONFIG_HOME ?? join(homedir(), '.config'), 'OpenGenie')
+      return join(process.env.XDG_CONFIG_HOME ?? join(homedir(), '.config'), 'GenieEngine')
   }
 }
 
 function readHarness() {
-  // Env vars come from the OpenGenie instance that spawned this OpenCode
+  // Env vars come from the GenieEngine instance that spawned this OpenCode
   // server, so they can't point at the wrong instance and don't suffer the
   // shared-file races harness.json has when several instances run at once
   // (e.g. dev + packaged: one quitting used to delete the other's file).
-  const { OPENGENIE_HARNESS_PORT: envPort, OPENGENIE_HARNESS_TOKEN: envToken } = process.env
+  const { GENIEENGINE_HARNESS_PORT: envPort, GENIEENGINE_HARNESS_TOKEN: envToken } = process.env
   if (envPort && envToken) return { port: Number(envPort), token: envToken }
   try {
     return JSON.parse(readFileSync(join(userDataDir(), 'harness.json'), 'utf8'))
@@ -56,7 +56,7 @@ function harnessRequest(harness, method, path, body) {
         port: harness.port,
         method,
         path,
-        headers: { 'content-type': 'application/json', 'x-opengenie-token': harness.token },
+        headers: { 'content-type': 'application/json', 'x-genieengine-token': harness.token },
         timeout: 0
       },
       (res) => {
@@ -81,12 +81,12 @@ function harnessRequest(harness, method, path, body) {
 async function callHarness(name, args) {
   const harness = readHarness()
   if (!harness) {
-    return { ok: false, text: 'OpenGenie does not appear to be running (harness.json not found). These tools only work while the OpenGenie app is open.' }
+    return { ok: false, text: 'GenieEngine does not appear to be running (harness.json not found). These tools only work while the GenieEngine app is open.' }
   }
   try {
     return await harnessRequest(harness, 'POST', '/tool', JSON.stringify({ name, arguments: args }))
   } catch (err) {
-    return { ok: false, text: `Failed to reach OpenGenie: ${err.message}` }
+    return { ok: false, text: `Failed to reach GenieEngine: ${err.message}` }
   }
 }
 
@@ -105,7 +105,7 @@ const TOOLS = [
   {
     name: 'run_game_test',
     description:
-      'Start the currently open OpenGenie game project off-screen for testing. The game runs the full native engine (rendering, physics, audio muted display) without showing a window. Always call this before other game_* tools, and stop_game_test when done.',
+      'Start the currently open GenieEngine game project off-screen for testing. The game runs the full native engine (rendering, physics, audio muted display) without showing a window. Always call this before other game_* tools, and stop_game_test when done.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false }
   },
   {
@@ -139,7 +139,7 @@ const TOOLS = [
   {
     name: 'game_screenshot',
     description:
-      'Capture a PNG screenshot of the running test game (rendered off-screen). Returns the image and saves it inside the project at .opengenie/test-shots/ — if you cannot view images yourself, hand that saved path to the image-reader subagent. Never copy screenshots or read them from anywhere else.',
+      'Capture a PNG screenshot of the running test game (rendered off-screen). Returns the image and saves it inside the project at .genieengine/test-shots/ — if you cannot view images yourself, hand that saved path to the image-reader subagent. Never copy screenshots or read them from anywhere else.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false }
   },
   {
@@ -160,7 +160,7 @@ const TOOLS = [
   {
     name: 'game_logs',
     description:
-      'Get the game\'s recent console output (prints and script errors) and current run status. Includes "[opengenie] fps" lines with frame-rate stats (avg/min/max/1% low/0.1% low per 60s window). The full frame-rate history across runs — including the user\'s own play sessions — persists in .opengenie/perf.log; read that file when diagnosing performance problems.',
+      'Get the game\'s recent console output (prints and script errors) and current run status. Includes "[genieengine] fps" lines with frame-rate stats (avg/min/max/1% low/0.1% low per 60s window). The full frame-rate history across runs — including the user\'s own play sessions — persists in .genieengine/perf.log; read that file when diagnosing performance problems.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false }
   },
   {
@@ -171,7 +171,7 @@ const TOOLS = [
 ]
 
 /**
- * Offered only when the user has configured an OpenAI API key in OpenGenie's
+ * Offered only when the user has configured an OpenAI API key in GenieEngine's
  * settings panel (checked via /capabilities at list time).
  */
 const GPT_IMAGE_TOOL = {
@@ -196,7 +196,7 @@ const GPT_IMAGE_TOOL = {
 
 /**
  * Offered only when the user has configured Tencent HY 3D credentials in
- * OpenGenie's setup panel (checked via /capabilities at list time).
+ * GenieEngine's setup panel (checked via /capabilities at list time).
  */
 const HY3D_TOOL = {
   name: 'generate_3d_asset',
@@ -234,7 +234,7 @@ async function handle(request) {
       result: {
         protocolVersion: params?.protocolVersion ?? '2025-03-26',
         capabilities: { tools: {} },
-        serverInfo: { name: 'opengenie', version: '0.1.0' }
+        serverInfo: { name: 'genieengine', version: '0.1.0' }
       }
     })
   } else if (method === 'tools/list') {

@@ -11,7 +11,7 @@ import { loadTranscriptRecap, saveChatAttachments, saveChatUploads, type SavedUp
 // Benign import cycles (opencode-setup and opencode-config → opencode-setup
 // import shutdownChat): all sides only use the other's exports at call time,
 // never during module evaluation.
-import { agentInstructionsPath, opengenieMcpEntry } from './opencode-config'
+import { agentInstructionsPath, genieengineMcpEntry } from './opencode-config'
 import { GAME_TESTER_AGENT, IMAGE_READER_AGENT, resolveChatModel } from './opencode-setup'
 import { getHarnessEndpoint } from './test-harness'
 import type { ChatAttachment, ChatModelTier, ChatPartUpdate, ChatToolStatus } from '../../shared/types'
@@ -150,7 +150,7 @@ function isUnderRoot(dir: string, root: string): boolean {
 
 /**
  * OpenCode pauses the whole session until permission asks are answered, and
- * OpenGenie has no permission UI — unanswered asks would freeze the chat
+ * GenieEngine has no permission UI — unanswered asks would freeze the chat
  * forever. Policy, matching the CLI's autonomous behavior:
  *
  *  - external_directory asks for the OS temp dir are approved — shell
@@ -197,8 +197,8 @@ function replyToPermission(sessionId: string, permissionId: string, permission: 
       feedback =
         `${dirs.join(', ') || 'That path'} is outside the project directory and off-limits. ` +
         'Work only inside the project (the OS temp dir is fine for scratch files). ' +
-        'Game screenshots are already saved in-project under .opengenie/test-shots/ and ' +
-        'user-attached files (images, zips, asset folders) under .opengenie/attachments/ — ' +
+        'Game screenshots are already saved in-project under .genieengine/test-shots/ and ' +
+        'user-attached files (images, zips, asset folders) under .genieengine/attachments/ — ' +
         'read them from there instead of copying.'
     }
   }
@@ -348,8 +348,8 @@ function ancestorDirs(p: string): string[] {
  * Wraps the chat-server command in a macOS seatbelt sandbox, inherited by
  * every tool it spawns (bash, rg, git, the MCP bridge). Two reasons:
  *
- *  - macOS attributes file access by this process tree to OpenGenie, so a
- *    stray `find ~` from the model used to pop "OpenGenie would like to
+ *  - macOS attributes file access by this process tree to GenieEngine, so a
+ *    stray `find ~` from the model used to pop "GenieEngine would like to
  *    access your Desktop/Photos/…" TCC dialogs at the user. Seatbelt denies
  *    the access before TCC is ever consulted — no dialog, the command just
  *    gets a permission error the agent can read and route around.
@@ -367,8 +367,8 @@ function ancestorDirs(p: string): string[] {
  * OpenCode spawns the MCP bridge with the app's own executable
  * (Contents/MacOS, loading Contents/Frameworks), and when the app runs from
  * a DMG mounted under /Volumes — a denied root — the bridge died at dyld
- * time, silently taking every opengenie game tool with it ("server
- * unavailable key=opengenie" in the OpenCode log). Electron startup also
+ * time, silently taking every genieengine game tool with it ("server
+ * unavailable key=genieengine" in the OpenCode log). Electron startup also
  * canonicalizes its own bundle path, stat'ing each ancestor directory
  * (/Volumes, the mount root), so those need metadata-level reads too or ICU
  * init crashes before main(). Metadata only — denied directories still can't
@@ -444,29 +444,29 @@ async function ensureServer(projectPath: string): Promise<OpencodeServer> {
   const opencode = await resolveOpencode()
   if (!opencode) {
     throw new Error(
-      'The bundled OpenCode assistant is missing. Reinstall OpenGenie, or run `npm run setup` in development.'
+      'The bundled OpenCode assistant is missing. Reinstall GenieEngine, or run `npm run setup` in development.'
     )
   }
 
   const port = await getFreePort()
   // The MCP bridge inherits this env through OpenCode, so the game-test tools
-  // reach THIS app instance even when several OpenGenie instances are running
+  // reach THIS app instance even when several GenieEngine instances are running
   // (harness.json alone is shared and only names whichever registered last).
   const harness = getHarnessEndpoint()
   // Same multi-instance problem one level up: the global config's
-  // mcp.opengenie command names the binary of whichever instance STARTED
+  // mcp.genieengine command names the binary of whichever instance STARTED
   // last, which this instance's sandbox usually can't read (and which is gone
   // entirely once its DMG is ejected). OPENCODE_CONFIG_CONTENT merges over
   // the file config at server startup — objects merge, arrays replace — so
   // the spawned server always runs this instance's own bridge while the
   // user's other config keys survive.
-  const mcpEntry = opengenieMcpEntry()
+  const mcpEntry = genieengineMcpEntry()
   // The app-owned build rules ride the same per-spawn override. `instructions`
   // is the one config key whose arrays concatenate across layers instead of
   // replacing, so this adds to whatever the user configured globally.
   const instructions = agentInstructionsPath()
   const configContent = {
-    ...(mcpEntry ? { mcp: { opengenie: mcpEntry } } : {}),
+    ...(mcpEntry ? { mcp: { genieengine: mcpEntry } } : {}),
     ...(instructions ? { instructions: [instructions] } : {})
   }
   const { command, args } = sandboxCommand(
@@ -486,7 +486,7 @@ async function ensureServer(projectPath: string): Promise<OpencodeServer> {
       NO_COLOR: '1',
       OPENCODE_ENABLE_EXA: '1',
       ...(harness
-        ? { OPENGENIE_HARNESS_PORT: String(harness.port), OPENGENIE_HARNESS_TOKEN: harness.token }
+        ? { GENIEENGINE_HARNESS_PORT: String(harness.port), GENIEENGINE_HARNESS_TOKEN: harness.token }
         : {}),
       ...(Object.keys(configContent).length
         ? { OPENCODE_CONFIG_CONTENT: JSON.stringify(configContent) }
@@ -725,7 +725,7 @@ export async function sendChatMessage(
       sessionID = session.id
     }
     // Asset uploads (zips, folders, models…) are copied into the project's
-    // .opengenie/attachments/ — the only place the sandboxed assistant can
+    // .genieengine/attachments/ — the only place the sandboxed assistant can
     // reach them. Unlike the best-effort image saving below, a failure here
     // fails the whole send: the message must not describe files that never
     // arrived. The error text is user-readable (caps, unreadable source).
@@ -743,7 +743,7 @@ export async function sendChatMessage(
   // can't split one turn across models (the resume nudges reuse it too).
   const model = await resolveChatModel(tier)
 
-  // Image attachments are additionally saved under .opengenie/attachments/
+  // Image attachments are additionally saved under .genieengine/attachments/
   // and their paths appended to the message: the main coding model may not
   // accept image input (OpenCode then replaces the file parts below with an
   // "ERROR: Cannot read" note), and the image-enabled subagents can only
@@ -765,14 +765,14 @@ export async function sendChatMessage(
   }
   // Asset uploads reach the model as paths only (copied above) — a zip or a
   // 40 MB GLB as a base64 message part would be useless to it. The note also
-  // spells out the .opengenie/ catch: Godot ignores that directory, so assets
+  // spells out the .genieengine/ catch: Godot ignores that directory, so assets
   // must be copied into the game tree to be usable.
   if (uploaded.length) {
     const list = uploaded.map((u) => (u.dir ? `${u.rel}/ (folder)` : u.rel)).join(', ')
     text +=
       `\n\n[The user uploaded asset file${uploaded.length > 1 ? 's' : ''} with this message, ` +
       `saved in the project at: ${list}. Explore what's inside — extract any .zip first ` +
-      '(e.g. `unzip -o <file>.zip -d <folder>`). Everything under .opengenie/ is invisible ' +
+      '(e.g. `unzip -o <file>.zip -d <folder>`). Everything under .genieengine/ is invisible ' +
       'to Godot, so copy the files the game needs into the proper assets/ sub-folders ' +
       'before wiring them into scenes.]'
   }
@@ -823,7 +823,7 @@ export async function sendChatMessage(
         ) {
           break
         }
-        console.warn(`[opengenie] transient provider error, resuming turn (attempt ${attempt + 1}):`, detail)
+        console.warn(`[genieengine] transient provider error, resuming turn (attempt ${attempt + 1}):`, detail)
         await new Promise((r) => setTimeout(r, TRANSIENT_RETRY_DELAYS_MS[attempt]))
         if (cancelled) break
       }

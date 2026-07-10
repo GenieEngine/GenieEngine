@@ -17,7 +17,7 @@ import { cleanupTestAgent, injectTestAgent } from './test-agent'
 
 /**
  * Runs the user's game with the full desktop engine, rendered *inside* the
- * OpenGenie window. Uses Godot 4.6+'s embedded display server (the same
+ * GenieEngine window. Uses Godot 4.6+'s embedded display server (the same
  * mechanism the Godot editor uses for its in-editor game view on macOS): the
  * game process renders into a cross-process CoreAnimation context, which we
  * composite via the layerhost native addon; display state and input travel
@@ -147,11 +147,11 @@ function pipeLines(stream: NodeJS.ReadableStream | null): void {
 
 /**
  * Record a completed 60s frame-rate window: into the game console/log buffer
- * (so the AI's game_logs tool sees it) and the project's .opengenie/perf.log
+ * (so the AI's game_logs tool sees it) and the project's .genieengine/perf.log
  * (persistent history for diagnosing performance across runs).
  */
 function logPerfStats(stats: PerfStats): void {
-  emitLog(`[opengenie] fps ${formatPerfStats(stats)} — history in .opengenie/perf.log`)
+  emitLog(`[genieengine] fps ${formatPerfStats(stats)} — history in .genieengine/perf.log`)
   if (injectedProjectPath) {
     void appendPerfLog(injectedProjectPath, state.mode ?? 'native', stats)
   }
@@ -166,7 +166,7 @@ function handlePerfFrames(deltas: number[]): void {
 
 function godotMissingError(): Error {
   return new Error(
-    'The bundled Godot engine is missing. Reinstall OpenGenie (or run `npm run setup` in development), or locate a Godot binary manually.'
+    'The bundled Godot engine is missing. Reinstall GenieEngine (or run `npm run setup` in development), or locate a Godot binary manually.'
   )
 }
 
@@ -198,7 +198,7 @@ function layerhost(): LayerHostAddon | null {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     layerHostAddon = require(path) as LayerHostAddon
   } catch (err) {
-    console.error('[opengenie] failed to load layerhost addon:', err)
+    console.error('[genieengine] failed to load layerhost addon:', err)
     layerHostAddon = null
   }
   return layerHostAddon
@@ -267,7 +267,7 @@ function updateTestMonitorLayer(): void {
   } catch (err) {
     // The run works without the live view — don't let a compositing failure
     // take down the test session.
-    emitLog(`[opengenie] live test monitor unavailable: ${err instanceof Error ? err.message : String(err)}`)
+    emitLog(`[genieengine] live test monitor unavailable: ${err instanceof Error ? err.message : String(err)}`)
   }
 }
 
@@ -384,10 +384,10 @@ async function playNativeEmbedded(godot: string, projectPath: string, visible: b
         // attach() shows the layer; honor the renderer's requested visibility
         // in case a modal opened before the game finished launching.
         if (!layerVisibleWanted) addon!.setVisible(false)
-        emitLog('[opengenie] game embedded in the OpenGenie window (native, full performance)')
+        emitLog('[genieengine] game embedded in the GenieEngine window (native, full performance)')
         setState({ status: 'running', mode: 'native' })
       } else {
-        emitLog('[opengenie] game running off-screen for an AI test run')
+        emitLog('[genieengine] game running off-screen for an AI test run')
         testContextId = contextId
         testGameSize = { width: rect.width, height: rect.height }
         // The monitor box may already be on screen (e.g. a second test run in
@@ -436,7 +436,7 @@ async function playNativeEmbedded(godot: string, projectPath: string, visible: b
   pipeLines(proc.stdout)
   pipeLines(proc.stderr)
   proc.once('exit', (code, signal) => {
-    emitLog(`[opengenie] game exited (${signal ?? `code ${code ?? 0}`})`)
+    emitLog(`[genieengine] game exited (${signal ?? `code ${code ?? 0}`})`)
     // Only tear down if this process is still the active run. After a Stop,
     // the old process exits up to 1.5s later (grace period before kill); by
     // then a new run may own nativeProcess/embedSession, and tearing down
@@ -459,7 +459,7 @@ export async function playGame(projectPath: string): Promise<void> {
   setState({ status: 'starting' })
   try {
     // The agent also runs during user play — it supplies the frame timings
-    // behind the FPS counter and .opengenie/perf.log (probe commands stay
+    // behind the FPS counter and .genieengine/perf.log (probe commands stay
     // test-only: runTestCommand refuses outside test mode).
     await cleanupTestAgent(projectPath) // stale files from a crashed run
     await injectTestAgent(projectPath)
@@ -626,6 +626,6 @@ export async function runTestInput(actions: TestInputAction[]): Promise<void> {
 export async function openGodotEditor(projectPath: string): Promise<void> {
   const godot = await resolveGodot()
   if (!godot) throw godotMissingError()
-  // Detached so the editor outlives OpenGenie if the user quits.
+  // Detached so the editor outlives GenieEngine if the user quits.
   spawn(godot, ['--editor', '--path', projectPath], { detached: true, stdio: 'ignore' }).unref()
 }

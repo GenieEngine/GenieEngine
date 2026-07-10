@@ -6,10 +6,10 @@ import { join } from 'node:path'
 import { applyAgentConfig, configuredImageModel } from './opencode-setup'
 
 /**
- * Keeps OpenGenie's entries in the user's global OpenCode config
+ * Keeps GenieEngine's entries in the user's global OpenCode config
  * (~/.config/opencode/opencode.json) up to date at app startup:
  *
- *  - `mcp.opengenie` — the game-testing MCP bridge, giving the assistant the
+ *  - `mcp.genieengine` — the game-testing MCP bridge, giving the assistant the
  *    run_game_test / game_input / game_screenshot / game_state tools in every
  *    project. The bridge is spawned with the app's own binary in Node mode
  *    (ELECTRON_RUN_AS_NODE), so users don't need Node installed; it locates
@@ -17,7 +17,7 @@ import { applyAgentConfig, configuredImageModel } from './opencode-setup'
  *    config stays valid across app restarts. This file entry serves OpenCode
  *    sessions launched outside the app (e.g. a terminal); servers the app
  *    spawns get a per-spawn override pointing at their own instance instead
- *    (see opengenieMcpEntry).
+ *    (see genieengineMcpEntry).
  *  - `agent.image-reader` / `agent.game-tester` — the image-enabled subagents
  *    (see opencode-setup.ts). Re-applied here so users who never reopen the
  *    settings panel (upgrades) still get them, and so prompt/tool refinements
@@ -26,7 +26,7 @@ import { applyAgentConfig, configuredImageModel } from './opencode-setup'
  * Everything else in the config is the user's and is left untouched.
  */
 /**
- * This instance's `mcp.opengenie` entry, pointing at its own binary and
+ * This instance's `mcp.genieengine` entry, pointing at its own binary and
  * bridge script by absolute path (null when the bridge script is missing —
  * broken install). Used twice:
  *
@@ -71,7 +71,7 @@ export function agentInstructionsPath(): string | null {
   return bundledResource('agent-instructions.md')
 }
 
-export function opengenieMcpEntry(): Record<string, unknown> | null {
+export function genieengineMcpEntry(): Record<string, unknown> | null {
   const bridgePath = bundledResource('mcp-bridge.mjs')
   if (!bridgePath) return null
   return {
@@ -84,7 +84,7 @@ export function opengenieMcpEntry(): Record<string, unknown> | null {
 
 export async function ensureOpencodeConfig(): Promise<void> {
   try {
-    const entry = opengenieMcpEntry()
+    const entry = genieengineMcpEntry()
     if (!entry) return
 
     const configDir = join(homedir(), '.config', 'opencode')
@@ -100,13 +100,13 @@ export async function ensureOpencodeConfig(): Promise<void> {
     const before = JSON.stringify(config)
 
     const mcp = (config.mcp ?? {}) as Record<string, unknown>
-    mcp.opengenie = entry
+    mcp.genieengine = entry
     config.mcp = mcp
 
     // Without this flag OpenCode halts the whole agent run when a permission
     // ask is rejected (the model only sees the denial after the user manually
     // prompts again). With it, a denial comes back as a normal tool error the
-    // agent can read and route around mid-run — OpenGenie answers every ask
+    // agent can read and route around mid-run — GenieEngine answers every ask
     // automatically (see replyToPermission in opencode.ts), so a halt would
     // otherwise strand the chat on every rejected out-of-project access.
     const experimental = (config.experimental ?? {}) as Record<string, unknown>
@@ -119,6 +119,6 @@ export async function ensureOpencodeConfig(): Promise<void> {
     if (JSON.stringify(config) === before) return
     await writeFile(configPath, JSON.stringify(config, null, 2))
   } catch (err) {
-    console.error('[opengenie] failed to update opencode config:', err)
+    console.error('[genieengine] failed to update opencode config:', err)
   }
 }

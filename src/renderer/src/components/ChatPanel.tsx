@@ -49,7 +49,7 @@ const ATTACH_EXTENSIONS = ['.txt', '.md', '.json', '.gd', '.tscn', '.cfg', '.csv
 
 // Asset uploads: archives and 2D/3D asset files too big or too binary to ride
 // the message as data URLs. They attach by disk path — on send the main
-// process copies them into the project's .opengenie/attachments/ and points
+// process copies them into the project's .genieengine/attachments/ and points
 // the assistant there (see saveChatUploads). Dropped/picked folders always
 // take this route. Checked against the same 512 MB cap the main process
 // enforces; folders can only be measured there, so theirs waits until send.
@@ -162,7 +162,7 @@ const SUGGESTIONS = [
  * tiers continue the same conversation — the model named on each message is
  * the only thing that changes — so switching mid-chat loses nothing.
  */
-const MODEL_TIER_KEY = 'opengenie:chatModelTier'
+const MODEL_TIER_KEY = 'genieengine:chatModelTier'
 
 const MODEL_TIERS: { id: ChatModelTier; label: string }[] = [
   { id: 'medium', label: 'Medium' },
@@ -206,7 +206,7 @@ function toolLabel(tool: { name: string; title?: string; agent?: string }): stri
     title = title.split('/').filter(Boolean).slice(-2).join('/')
   }
   if (title.length > 40) title = title.slice(0, 39) + '…'
-  const name = tool.name.replace(/^opengenie_/, '')
+  const name = tool.name.replace(/^genieengine_/, '')
   const label = title ? `${name} · ${title}` : name
   // Subagent calls carry their agent so delegated work reads as such.
   return tool.agent ? `${tool.agent} → ${label}` : label
@@ -580,7 +580,7 @@ export function ChatPanel({ projectPath, opencodeAvailable, onAssistantDone }: P
     for (const { file, dir } of incoming) {
       // Folders and asset files (zips, models, audio…) attach by path — only
       // their location crosses to the main process, which copies them into
-      // .opengenie/attachments/ when the message is sent.
+      // .genieengine/attachments/ when the message is sent.
       if (dir || isUpload(file)) {
         const path = window.api.pathForFile(file)
         if (!path) {
@@ -920,7 +920,7 @@ export function ChatPanel({ projectPath, opencodeAvailable, onAssistantDone }: P
           <div className="chat-empty">
             {!opencodeAvailable && (
               <div className="notice">
-                The bundled OpenCode assistant is missing. Reinstall OpenGenie, or run{' '}
+                The bundled OpenCode assistant is missing. Reinstall GenieEngine, or run{' '}
                 <code>npm run setup</code> in development.
               </div>
             )}

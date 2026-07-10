@@ -4,7 +4,7 @@ import type { ChatAttachment } from '../../shared/types'
 
 /**
  * Per-project chat persistence, stored inside the game project under
- * .opengenie/ (gitignored — chat transcripts are personal, never shared):
+ * .genieengine/ (gitignored — chat transcripts are personal, never shared):
  *
  * - chat.json           the rendered transcript plus the OpenCode session id,
  *                       restored when the project is reopened. /clear deletes
@@ -31,7 +31,7 @@ import type { ChatAttachment } from '../../shared/types'
  * so a schema change degrades to "no recap", never a crash.
  */
 
-const STATE_DIR = '.opengenie'
+const STATE_DIR = '.genieengine'
 const CHAT_FILE = 'chat.json'
 const INPUT_FILE = 'input-history.json'
 const ATTACH_DIR = 'attachments'
@@ -61,11 +61,11 @@ async function writeJsonAtomic(path: string, value: unknown): Promise<void> {
   await rename(tmp, path)
 }
 
-/** Projects whose .gitignore already got the .opengenie/ entry this run. */
+/** Projects whose .gitignore already got the .genieengine/ entry this run. */
 const ignoreEnsured = new Set<string>()
 
 /**
- * Creates the project's .opengenie/ state dir and keeps it out of both git
+ * Creates the project's .genieengine/ state dir and keeps it out of both git
  * and Godot. Shared with test-harness.ts, which stores game screenshots here.
  */
 export async function ensureProjectStateDir(projectPath: string): Promise<string> {
@@ -78,7 +78,7 @@ export async function ensureProjectStateDir(projectPath: string): Promise<string
     const gitignorePath = join(projectPath, '.gitignore')
     const current = await readFile(gitignorePath, 'utf8').catch(() => '')
     if (!current.split('\n').some((line) => line.trim().replace(/\/$/, '') === STATE_DIR)) {
-      const entry = `${current && !current.endsWith('\n') ? '\n' : ''}\n# OpenGenie local state (chat history, attachments, test screenshots)\n${STATE_DIR}/\n`
+      const entry = `${current && !current.endsWith('\n') ? '\n' : ''}\n# GenieEngine local state (chat history, attachments, test screenshots)\n${STATE_DIR}/\n`
       await writeFile(gitignorePath, current + entry).catch(() => {})
     }
     // .gdignore makes Godot skip the directory entirely — without it the
@@ -215,7 +215,7 @@ async function ensureAttachmentsDir(projectPath: string): Promise<string> {
 }
 
 /**
- * Writes message attachments into .opengenie/attachments/ and returns their
+ * Writes message attachments into .genieengine/attachments/ and returns their
  * project-relative paths (POSIX-style, ready for the message text). Saving to
  * disk is what lets an image reach the image-enabled subagents: they never
  * see the data URLs riding the chat message — a file path handed through the
@@ -281,7 +281,7 @@ export interface SavedUpload {
 
 /**
  * Copies path-based asset uploads (zips, folders, binary asset files) into
- * .opengenie/attachments/. The copy — rather than referencing the original
+ * .genieengine/attachments/. The copy — rather than referencing the original
  * location — is what makes the upload usable at all: the assistant's sandbox
  * confines it to the project directory, so a path under ~/Downloads might as
  * well not exist. Throws (with a user-readable message) when a source is

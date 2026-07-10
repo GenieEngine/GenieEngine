@@ -73,7 +73,7 @@ export interface ChatDonePayload {
  * - Asset upload (`path` set): .zip archives, whole folders, and binary asset
  *   files (3D models, audio, fonts) — too big/opaque to inline, so only the
  *   absolute disk path crosses to the main process, which copies the payload
- *   into the project's .opengenie/attachments/ when the message is sent and
+ *   into the project's .genieengine/attachments/ when the message is sent and
  *   points the assistant at it there.
  */
 export interface ChatAttachment {
@@ -268,7 +268,7 @@ export type ExportProgress =
   | { phase: 'done'; message?: string }
 
 /**
- * A code file with a parsed `#=== opengenie ===` header block (the format the
+ * A code file with a parsed `#=== genieengine ===` header block (the format the
  * injected agent instructions mandate for every file the AI writes — see
  * resources/agent-instructions.md). Backs the ECS viewer in the center pane.
  */
@@ -332,7 +332,7 @@ export type GameInputEvent =
   | { type: 'blur' }
 
 /** The API the preload script exposes on `window.api`. */
-export interface OpenGenieApi {
+export interface GenieEngineApi {
   platform: string
 
   // App / project lifecycle

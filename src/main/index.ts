@@ -10,7 +10,7 @@ import { loadSettings } from './state'
 import { sendToRenderer, setMainWindow } from './window'
 
 // Keeps the userData (settings) folder stable between dev and packaged runs.
-app.setName('OpenGenie')
+app.setName('GenieEngine')
 
 function createWindow(): void {
   const win = new BrowserWindow({
@@ -20,7 +20,7 @@ function createWindow(): void {
     minHeight: 640,
     show: false,
     backgroundColor: '#0e0e13',
-    title: 'OpenGenie',
+    title: 'GenieEngine',
     // Frameless-style titlebar on macOS for a modern, engine-like look.
     ...(process.platform === 'darwin' ? { titleBarStyle: 'hiddenInset' as const } : {}),
     webPreferences: {

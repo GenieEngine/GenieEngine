@@ -339,7 +339,7 @@ export function SetupOverlay({ status, onConfigured, onClose }: Props): React.JS
           <div>
             <h2 className="setup-title">{status.configured ? 'AI settings' : 'Connect your AI assistant'}</h2>
             <p className="setup-sub">
-              OpenGenie's assistant is powered by OpenCode: Medium and Large chat models you can
+              GenieEngine's assistant is powered by OpenCode: Medium and Large chat models you can
               switch between per message, plus image-enabled helpers that read your images and
               play-test your game.
             </p>

@@ -30,7 +30,7 @@ import { shutdownChat } from './opencode'
  *    `agent` in the same config:
  *      · image-reader — describes image files (user-uploaded references,
  *        generated art) to the chat agent, which may not see images itself;
- *      · game-tester  — plays the game via the opengenie MCP tools and
+ *      · game-tester  — plays the game via the genieengine MCP tools and
  *        verifies the screenshots it takes.
  *
  * Every slot has its own endpoint + API key. Keys go into OpenCode's
@@ -188,7 +188,7 @@ export async function resolveChatModel(tier: ChatModelTier): Promise<{ providerI
 }
 
 /**
- * (Re)writes OpenGenie's agent team into an OpenCode config object: the two
+ * (Re)writes GenieEngine's agent team into an OpenCode config object: the two
  * image-enabled subagents the main coding agent delegates to. Called on every
  * setup save AND at app startup (so app updates refresh prompts/tools without
  * the user re-running setup — see ensureOpencodeConfig). Agents under other
@@ -204,13 +204,13 @@ export function applyAgentConfig(config: Record<string, unknown>, imageModelRef:
   agents[IMAGE_READER_AGENT] = {
     description:
       'Views image files and reports their contents in detail: user-attached references ' +
-      '(saved under .opengenie/attachments/), game screenshots (saved under ' +
-      '.opengenie/test-shots/), generated art, or any image in the project. ' +
+      '(saved under .genieengine/attachments/), game screenshots (saved under ' +
+      '.genieengine/test-shots/), generated art, or any image in the project. ' +
       'Give it the image path(s) and the questions you need answered.',
     mode: 'subagent',
     model: imageModelRef,
     prompt:
-      'You are the image-analysis specialist inside OpenGenie, an AI game engine. Another ' +
+      'You are the image-analysis specialist inside GenieEngine, an AI game engine. Another ' +
       'agent that may not be able to see images delegates image questions to you. Open every ' +
       'image path you were given with the read tool, look carefully, and answer with a ' +
       'precise, complete description — the caller cannot see the image, so your words are ' +
@@ -240,7 +240,7 @@ export function applyAgentConfig(config: Record<string, unknown>, imageModelRef:
       todoread: false,
       webfetch: false,
       websearch: false,
-      'opengenie*': false
+      'genieengine*': false
     }
   }
 
@@ -253,9 +253,9 @@ export function applyAgentConfig(config: Record<string, unknown>, imageModelRef:
     mode: 'subagent',
     model: imageModelRef,
     prompt:
-      'You are the game-testing specialist inside OpenGenie, an AI game engine for Godot 4 ' +
+      'You are the game-testing specialist inside GenieEngine, an AI game engine for Godot 4 ' +
       'games. You verify that the current project actually works by playing it with the ' +
-      'opengenie MCP tools, then report your findings. You never edit files — you test and ' +
+      'genieengine MCP tools, then report your findings. You never edit files — you test and ' +
       'report so the coding agent can fix.\n\n' +
       'Test procedure:\n' +
       '1. run_game_test — start the game off-screen (full engine, real rendering).\n' +
@@ -295,7 +295,7 @@ export function applyAgentConfig(config: Record<string, unknown>, imageModelRef:
       bash: false,
       task: false,
       question: false,
-      'opengenie_generate*': false
+      'genieengine_generate*': false
     }
   }
 

@@ -11,8 +11,8 @@ import { Workspace } from './components/Workspace'
 /** Which panel occupies the center pane. */
 type CenterView = 'game' | 'ecs'
 
-const SIDEBAR_WIDTH_KEY = 'opengenie:sidebarWidth'
-const ASPECT_KEY = 'opengenie:aspect'
+const SIDEBAR_WIDTH_KEY = 'genieengine:sidebarWidth'
+const ASPECT_KEY = 'genieengine:aspect'
 const ASPECT_MODES: AspectMode[] = ['any', 'desktop', 'mobile-portrait', 'mobile-landscape']
 // "3 inch" workspace sidebar ≈ 288px at 96dpi; default slightly wider.
 const SIDEBAR_DEFAULT = 300

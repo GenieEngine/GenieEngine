@@ -35,7 +35,7 @@ let endpoint: { port: number; token: string } | null = null
 /**
  * This instance's harness address. Injected into the env of every OpenCode
  * server we spawn so the bridge always reaches THIS app instance. harness.json
- * can't provide that guarantee: it's one file shared by every OpenGenie
+ * can't provide that guarantee: it's one file shared by every GenieEngine
  * instance (dev + packaged can run side by side), so it holds whichever
  * instance registered last — the file is only a fallback for OpenCode
  * sessions that weren't launched by the app (e.g. the opencode CLI).
@@ -52,7 +52,7 @@ function harnessFilePath(): string {
 const KEEP_SHOTS = 12
 
 /**
- * Screenshots live INSIDE the project (.opengenie/test-shots/, gitignored and
+ * Screenshots live INSIDE the project (.genieengine/test-shots/, gitignored and
  * .gdignore'd via ensureProjectStateDir). They used to go to the app's
  * userData dir, and handing that ~/Library path to the model lured it into
  * reading/copying outside the project — which the permission policy rejects
@@ -132,7 +132,7 @@ async function dispatchTool(name: string, args: Record<string, unknown>): Promis
   switch (name) {
     case 'run_game_test': {
       const project = getCurrentProject()
-      if (!project) return { ok: false, text: 'No project is open in OpenGenie.' }
+      if (!project) return { ok: false, text: 'No project is open in GenieEngine.' }
       await startGameTest(project.path)
       return { ok: true, text: 'Game is running off-screen. Use game_input / game_screenshot / game_state to interact and observe, and stop_game_test when finished.' }
     }
@@ -149,7 +149,7 @@ async function dispatchTool(name: string, args: Record<string, unknown>): Promis
     }
     case 'game_screenshot': {
       const project = getCurrentProject()
-      if (!project) return { ok: false, text: 'No project is open in OpenGenie.' }
+      if (!project) return { ok: false, text: 'No project is open in GenieEngine.' }
       const dir = join(await ensureProjectStateDir(project.path), 'test-shots')
       mkdirSync(dir, { recursive: true })
       const file = `shot-${Date.now()}.png`
@@ -165,7 +165,7 @@ async function dispatchTool(name: string, args: Record<string, unknown>): Promis
       return {
         ok: true,
         text:
-          `Screenshot saved inside the project at .opengenie/test-shots/${file}. ` +
+          `Screenshot saved inside the project at .genieengine/test-shots/${file}. ` +
           'If you cannot view the attached image yourself, pass that path to the ' +
           'image-reader subagent — it reads it directly; never copy screenshots elsewhere.',
         imageBase64: shot.base64,
@@ -189,7 +189,7 @@ async function dispatchTool(name: string, args: Record<string, unknown>): Promis
     }
     case 'generate_3d_asset': {
       const project = getCurrentProject()
-      if (!project) return { ok: false, text: 'No project is open in OpenGenie.' }
+      if (!project) return { ok: false, text: 'No project is open in GenieEngine.' }
       const result = await generateAsset(project.path, {
         prompt: typeof args.prompt === 'string' ? args.prompt : undefined,
         imagePath: typeof args.image_path === 'string' ? args.image_path : undefined,
@@ -219,7 +219,7 @@ async function dispatchTool(name: string, args: Record<string, unknown>): Promis
     }
     case 'generate_2d_asset': {
       const project = getCurrentProject()
-      if (!project) return { ok: false, text: 'No project is open in OpenGenie.' }
+      if (!project) return { ok: false, text: 'No project is open in GenieEngine.' }
       const result = await generateImageAsset(project.path, {
         prompt: String(args.prompt ?? ''),
         folder: String(args.folder ?? ''),
@@ -275,7 +275,7 @@ export function startTestHarness(): void {
       res.writeHead(status, { 'content-type': 'application/json' })
       res.end(JSON.stringify(payload))
     }
-    if (!tokenMatches(req.headers['x-opengenie-token'], token)) {
+    if (!tokenMatches(req.headers['x-genieengine-token'], token)) {
       respond(403, { ok: false, text: 'invalid token' })
       return
     }
@@ -318,7 +318,7 @@ export function stopTestHarness(): void {
   server?.close()
   server = null
   // Only remove harness.json if it still holds OUR registration. Another
-  // OpenGenie instance may have overwritten it since we launched (the file is
+  // GenieEngine instance may have overwritten it since we launched (the file is
   // shared), and deleting theirs would strand that still-running instance —
   // this exact race broke the packaged app while a dev instance quit.
   try {

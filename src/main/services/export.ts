@@ -50,7 +50,7 @@ const PLATFORMS: PlatformSpec[] = [
     presetName: 'macOS',
     platform: 'macOS',
     outFile: (n) => `${n}.zip`,
-    extraOptions: (slug) => `application/bundle_identifier="ai.opengenie.${slug}"\n`
+    extraOptions: (slug) => `application/bundle_identifier="ai.genieengine.${slug}"\n`
   },
   {
     id: 'linux',
@@ -78,7 +78,7 @@ const PLATFORMS: PlatformSpec[] = [
     presetName: 'iOS',
     platform: 'iOS',
     outFile: (n) => `${n}.ipa`,
-    extraOptions: (slug) => `application/bundle_identifier="ai.opengenie.${slug}"\n`
+    extraOptions: (slug) => `application/bundle_identifier="ai.genieengine.${slug}"\n`
   }
 ]
 
@@ -271,7 +271,7 @@ function mergePresets(existing: string, specs: PlatformSpec[], slug: string): st
   if (existing !== '' && missing.length === 0) return null
 
   const blocks = [...kept.map((p) => p.body), ...missing.map((s) => presetBlock(s, slug))]
-  let out = '; Export presets — OpenGenie appends missing presets here; existing ones (including\n; presets configured in the Godot editor) are preserved as-is.\n'
+  let out = '; Export presets — GenieEngine appends missing presets here; existing ones (including\n; presets configured in the Godot editor) are preserved as-is.\n'
   blocks.forEach((body, i) => {
     const renumbered = body.replace(/^\[preset\.\d+(\.options)?\]/gm, (_m, opt: string | undefined) => `[preset.${i}${opt ?? ''}]`)
     out += '\n' + renumbered.trimEnd() + '\n'

@@ -52,7 +52,7 @@ export async function createProject(parentDir: string, name: string): Promise<Pr
   try {
     await init(dir)
     await stage(dir, ['.'])
-    await commit(dir, 'Initial commit — created with OpenGenie')
+    await commit(dir, 'Initial commit — created with GenieEngine')
   } catch {
     /* ignore */
   }
@@ -62,11 +62,11 @@ export async function createProject(parentDir: string, name: string): Promise<Pr
 
 /**
  * SHA-256 of every AGENTS.md body (everything after the title line, which
- * carries the project name) that a past OpenGenie version scaffolded —
+ * carries the project name) that a past GenieEngine version scaffolded —
  * rendered from each historical agentsMd() in templates.ts's git history.
  * A body that hash-matches was written by the app and never edited, so
  * refreshAgentsMd may safely replace the file; anything else belongs to the
- * user (or the assistant, or a non-OpenGenie project) and is left alone.
+ * user (or the assistant, or a non-GenieEngine project) and is left alone.
  *
  * When agentsMd() changes, add the OUTGOING version's hash here — sha256 of
  * agentsMd('x') after the first newline — or projects created on the old
@@ -92,7 +92,7 @@ function agentsBodyHash(content: string): string {
 
 /**
  * Upgrade a scaffolded AGENTS.md to the current template when the project is
- * opened. Early OpenGenie versions froze the full build rules into each
+ * opened. Early GenieEngine versions froze the full build rules into each
  * project's AGENTS.md; those rules now ship with the app and are injected per
  * chat-server spawn (see agentInstructionsPath in opencode-config.ts), so a
  * stale copy would sit in the system prompt alongside — and contradict — the
@@ -119,7 +119,7 @@ export async function openProject(dir: string): Promise<ProjectInfo> {
   if (!existsSync(join(dir, 'project.godot'))) {
     throw new Error(
       'The selected folder is not a Godot project (no project.godot found). ' +
-        'Choose a project created with OpenGenie or an existing Godot 4 project.'
+        'Choose a project created with GenieEngine or an existing Godot 4 project.'
     )
   }
   const name = await readProjectName(dir)

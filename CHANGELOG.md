@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to OpenGenie are documented here.
+All notable changes to GenieEngine are documented here.
 
 ## [Unreleased]
 
@@ -39,10 +39,10 @@ All notable changes to OpenGenie are documented here.
 - Exporting only worked correctly on macOS — Windows and Linux now extract export templates with their own native tools
 - Stopping a game run could be undone by a delayed exit event from a previously stopped run
 - Links in the AI chat no longer navigate the whole app UI away — they now open in the system browser
-- Running multiple OpenGenie instances no longer lets the assistant's game-testing tools cross-talk between them
+- Running multiple GenieEngine instances no longer lets the assistant's game-testing tools cross-talk between them
 - Restoring a saved chat session now correctly resumes the conversation instead of silently starting a new one
 - macOS window traffic lights disappearing in native fullscreen no longer leave stray padding in the title bar
 
 ### Changed
 - AI provider setup now accepts any OpenAI-compatible endpoint rather than a fixed list of providers
-- App and installer now use a custom OpenGenie icon, including the macOS `.dmg` file itself
+- App and installer now use a custom GenieEngine icon, including the macOS `.dmg` file itself

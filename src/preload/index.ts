@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import type { OpenGenieApi } from '../shared/types'
+import type { GenieEngineApi } from '../shared/types'
 
 function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
   return ipcRenderer.invoke(channel, ...args) as Promise<T>
@@ -13,7 +13,7 @@ function subscribe(channel: string, cb: (...args: never[]) => void): () => void 
   return () => ipcRenderer.removeListener(channel, listener)
 }
 
-const api: OpenGenieApi = {
+const api: GenieEngineApi = {
   platform: process.platform,
 
   getInitialState: () => invoke('app:getInitialState'),
