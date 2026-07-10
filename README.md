@@ -1,19 +1,19 @@
-# GenieEngine
+<p align="center">
+  <img src="docs/logo.png" alt="GenieEngine" width="440">
+</p>
 
 <p align="center">
   <a href="https://discord.gg/BC8fF2nr4y"><img src="https://img.shields.io/badge/Discord-Join%20the%20community-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPLv3-blue?style=for-the-badge" alt="License: GPLv3"></a>
 </p>
 
-GenieEngine is an AI-powered game engine that lets anyone build a real video game by describing it
-in plain language. Games are real [Godot 4](https://godotengine.org) projects under the hood, and
+**GenieEngine** is an AI-powered game engine that lets you build commercial-quality video game with AI. Games are real [Godot 4](https://godotengine.org) projects under the hood, and
 the AI assistant is powered by the [OpenCode](https://opencode.ai) CLI. Everything — the engine,
 git, and the AI agent — ships inside the app, so there's nothing to install or configure beyond
 an API key.
 
 ![GenieEngine running a game built with it, chat on the right, embedded game view on the left](docs/screenshot.png)
-*GenieEngine automatically tests your game, so you spend less time debugging, and more time in the
-creative process of creating your game. [Play demo here](https://legojazz.itch.io/cube-world-opengenie-demo).*
+*GenieEngine is capable of creating commercial-grade games. [Play demo here](https://legojazz.itch.io/survival-fortress).*
 
 ## Free and Open Source
 
@@ -21,15 +21,20 @@ GenieEngine is completely free and open source under the permissive GPLv3 licens
 attached, no royalties. Games you create are yours. We follow the very permissive Open Source model
 of Godot, which is a key technology that enables GenieEngine.
 
+## Quick Install
+
+| Platform | Download |
+| --- | --- |
+| macOS (Apple Silicon & Intel) | [OpenGenie.dmg](https://github.com/GenieEngine/GenieEngine/releases/download/v0.1.0/OpenGenie-0.1.0-arm64.dmg) |
+| Windows | [OpenGenie-Setup.exe](https://github.com/GenieEngine/GenieEngine/releases/download/v0.1.0/OpenGenie.Setup.0.1.0.exe) |  Note: I don't have a Windows machine, so this is untested
+| Linux | [OpenGenie.AppImage](https://github.com/GenieEngine/GenieEngine/releases/download/v0.1.0/OpenGenie-0.1.0.AppImage) |  Note: I don't have a Linux machine, so this is untested
+
 ## Why GenieEngine (vs. a coding agent like Claude Code)
 
 Claude Code and OpenCode are excellent general-purpose coding agents — but they assume you already
 have a dev environment, are comfortable in a terminal, can easily create art assets, and can wire
 up a game engine and an export process yourself. GenieEngine uses that same class of AI agent, but
 packages it for one job: making a game.
-
-- **Zero setup** — Godot, git, and the AI agent all ship inside the app. No terminal, no installing
-  an engine, no build pipeline to configure. Batteries fully included.
 
 - **The AI tests its own work** — through a built-in MCP harness, the assistant can run the game
   off-screen, send scripted input, take screenshots, and query game state — so it catches broken
@@ -47,47 +52,36 @@ Claude Code is the right tool if you're a developer who wants an agent inside yo
 workflow. GenieEngine is for anyone who wants to make a game, with the same caliber of AI doing the
 work end-to-end.
 
-## Download
-
-| Platform | Download |
-| --- | --- |
-| macOS (Apple Silicon & Intel) | [OpenGenie.dmg](https://github.com/GenieEngine/GenieEngine/releases/download/v0.1.0/OpenGenie-0.1.0-arm64.dmg) |
-| Windows | [OpenGenie-Setup.exe](https://github.com/GenieEngine/GenieEngine/releases/download/v0.1.0/OpenGenie.Setup.0.1.0.exe) |  Note: I don't have a Windows machine, so this is untested
-| Linux | [OpenGenie.AppImage](https://github.com/GenieEngine/GenieEngine/releases/download/v0.1.0/OpenGenie-0.1.0.AppImage) |  Note: I don't have a Linux machine, so this is untested
-
 ## Getting started
 
 ### 1. Install and create a project
 
-Install GenieEngine and open it. From the welcome screen, click **New Game** to scaffold a fresh
-project (and choose where its source lives), or **Open** to load an existing one.
+Install GenieEngine and open it. From the welcome screen, click **New Game**.
 
 ### 2. Connect your AI assistant
 
 On first launch, GenieEngine shows a **Connect your AI assistant** screen (reopen it any time via
 the gear icon in the title bar). It has three tabs:
 
-**Coding Agent** — required; this is the agent that writes your game's code and logic.
+**Models** — required; the model slots that power the assistant. Each slot takes any
+OpenAI-compatible **API endpoint** (defaults to **OpenRouter**, `https://openrouter.ai/api/v1`), a
+**Model**, an **API key**, and **Thinking** / **Reasoning effort** settings. Grab a key from
+[openrouter.ai/keys](https://openrouter.ai/keys) and paste it into the Medium slot — the Large and
+Image slots reuse it if you leave theirs blank. Recommended setup:
 
-- Defaults to **OpenRouter** (`https://openrouter.ai/api/v1`) with the `moonshotai/kimi-k2.7-code`
-  model. Grab a key from [openrouter.ai/keys](https://openrouter.ai/keys), paste it into
-  **API key**, and you're ready to go. Note: I've tested kimi-k2.7-code and claude-sonnet-5, and
-  both work quite well.
+| Slot | What it does | Recommended model | Thinking | Reasoning effort |
+| --- | --- | --- | --- | --- |
+| **Chat model — Medium** | The everyday model that plans and writes your game's code | `deepseek/deepseek-v4-flash` | Enabled | Max |
+| **Chat model — Large** | A heavyweight model for tough tasks — switch to it from the dropdown in the chat box | `deepseek/deepseek-v4-pro` | Enabled | Max |
+| **Image model** | Reads images you attach and play-tests your game with screenshots — must accept image input | `moonshotai/kimi-k2.7-code` | Enabled | Max |
 
-- To use a different provider instead — OpenAI directly, or any other OpenAI-compatible endpoint —
-  just change **API endpoint** and **Model** and supply that provider's key.
+**Asset generation** *(optional)* — two more tabs let the assistant create art straight into your
+project's assets folder:
 
-**2D Asset Generation** *(optional)* — lets the assistant generate sprites, icons, and textures
-straight into your project.
-
-- Add an OpenAI API key from [platform.openai.com/api-keys](https://platform.openai.com/api-keys).
-
-**3D Asset Generation** *(optional)* — lets the assistant generate 3D models straight into your
-project via Tencent's Hunyuan 3D.
-
-- Add your **Tencent SecretId** and **SecretKey**. These come from the Tencent Cloud console, under
-  Access Management (CAM) → API Keys — see [Tencent's Hunyuan-to-3D docs](https://www.tencentcloud.com/document/product/1284/75287)
-  for the API this powers.
+| Tab | What it enables | Credentials |
+| --- | --- | --- |
+| **2D Asset Generation** | Sprites, icons, and UI as transparent 1024×1024 PNGs, via OpenAI's gpt-image-1.5 | OpenAI API key from [platform.openai.com/api-keys](https://platform.openai.com/api-keys) |
+| **3D Asset Generation** | 3D models, via Tencent's Hunyuan 3D | **Tencent SecretId** and **SecretKey** from the Tencent Cloud console, under Access Management (CAM) → API Keys — see [Tencent's Hunyuan-to-3D docs](https://www.tencentcloud.com/document/product/1284/75287) |
 
 Skipping a tab just disables that capability; the assistant will explain what it can't do rather
 than failing silently.
@@ -98,24 +92,8 @@ Describe what you want in the chat — the assistant writes the code, and you ca
 time to play the current build right in the window. Ask it for art (2D or 3D) too ("give the player a
 pixel-art sprite").
 
-![GenieEngine's ECS viewer showing entities, components, and systems as a linked graph](docs/screenshot-ecs.png)
-*GenieEngine builds your games using best practices. See creation of an
-[entity-component-system](https://en.wikipedia.org/wiki/Entity_component_system).*
-
 ### 4. Shipping your game
 
 When you're ready to ship, click **Export** and pick any combination of Godot's six platforms —
-Godot's export templates download automatically the first time you export:
-
-- **Windows** — a standalone `.exe`
-- **macOS** — a `.zip` containing a signed `.app` bundle
-- **Linux** — a standalone `.x86_64` binary
-- **Web** — an `index.html` you can drop on any static host and play in the browser
-- **Android** — an `.apk` (needs the Android SDK installed)
-- **iOS** — an `.ipa` (needs Xcode, macOS only)
-
-Desktop and Web exports work out of the box with no extra setup. Android and iOS need their
-platform SDKs installed locally, since those are Apple's and Google's own toolchains to sign and
-build against — GenieEngine surfaces Godot's own error messages if a step is missing. Every export
-shows up in the project's `exports/<platform>/` folder, ready to upload or hand to someone else to
-play.
+Godot's export templates download automatically the first time you export: **Windows**, **macOS**, 
+**Linux**, **Web**, **Android**, and **iOS**.
