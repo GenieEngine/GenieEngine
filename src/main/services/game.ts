@@ -36,6 +36,15 @@ let layerAttached = false
 let layerVisibleWanted = true
 let stageRect: StageRect | null = null
 
+// Live monitor for AI test runs: the off-screen game renders into a CAContext
+// either way, so the layer host can mirror it — scaled down — into the small
+// monitor box the test card shows. The renderer reports that box's rect; the
+// context id waits here until it does (the card only renders once the state
+// flips to running, i.e. after the id arrived).
+let testMonitorRect: StageRect | null = null
+let testContextId: number | null = null
+let testGameSize: { width: number; height: number } | null = null
+
 // The project that currently has the agent (test-agent.ts) injected — set for
 // every embedded run (play and test), cleaned up on stop. Also where perf.log goes.
 let injectedProjectPath: string | null = null
@@ -168,6 +177,8 @@ function godotMissingError(): Error {
 interface LayerHostAddon {
   attach(handle: Buffer, contextId: number, x: number, y: number, w: number, h: number): boolean
   setFrame(x: number, y: number, w: number, h: number): void
+  /** Scale the hosted game tree (1 = native size; <1 shrinks into the frame). */
+  setScale(scale: number): void
   setVisible(visible: boolean): void
   detach(): void
 }
@@ -207,9 +218,49 @@ function sendStageSizeToGame(session: EmbedSession, rect: StageRect): void {
 /** Renderer reports where the stage sits inside the window (CSS px = points). */
 export function setStageRect(rect: StageRect): void {
   stageRect = rect
-  if (layerAttached && embedSession) {
+  // Test mode: the layer mirrors the game into the monitor box, not the
+  // stage, and the off-screen game keeps its launch size (a mid-test resize
+  // would disrupt the AI's run).
+  if (layerAttached && embedSession && state.mode !== 'test') {
     layerhost()?.setFrame(rect.x, rect.y, rect.width, rect.height)
     sendStageSizeToGame(embedSession, rect)
+  }
+}
+
+/** Renderer reports where the test card's live monitor box sits. */
+export function setTestMonitorRect(rect: StageRect): void {
+  testMonitorRect = rect
+  updateTestMonitorLayer()
+}
+
+/**
+ * Attach or reposition the live-monitor layer for an AI test run: the full
+ * game tree, letterbox-fitted into the reported box by scaling the layer, so
+ * the user can watch the AI play. Purely visual — the box's DOM (hitTest nil)
+ * takes no input, and the game's render size is untouched.
+ */
+function updateTestMonitorLayer(): void {
+  const addon = layerhost()
+  const win = getMainWindow()
+  if (!addon || !win || state.mode !== 'test' || testContextId === null || !testMonitorRect || !testGameSize) return
+  const scale = Math.min(testMonitorRect.width / testGameSize.width, testMonitorRect.height / testGameSize.height)
+  const width = testGameSize.width * scale
+  const height = testGameSize.height * scale
+  const x = testMonitorRect.x + (testMonitorRect.width - width) / 2
+  const y = testMonitorRect.y + (testMonitorRect.height - height) / 2
+  try {
+    if (!layerAttached) {
+      addon.attach(win.getNativeWindowHandle(), testContextId, x, y, width, height)
+      layerAttached = true
+      if (!layerVisibleWanted) addon.setVisible(false)
+    } else {
+      addon.setFrame(x, y, width, height)
+    }
+    addon.setScale(scale)
+  } catch (err) {
+    // The run works without the live view — don't let a compositing failure
+    // take down the test session.
+    emitLog(`[opengenie] live test monitor unavailable: ${err instanceof Error ? err.message : String(err)}`)
   }
 }
 
@@ -330,7 +381,12 @@ async function playNativeEmbedded(godot: string, projectPath: string, visible: b
         setState({ status: 'running', mode: 'native' })
       } else {
         emitLog('[opengenie] game running off-screen for an AI test run')
-        setState({ status: 'running', mode: 'test' })
+        testContextId = contextId
+        testGameSize = { width: rect.width, height: rect.height }
+        // The monitor box may already be on screen (e.g. a second test run in
+        // a row) — mirror into it right away instead of waiting for a report.
+        updateTestMonitorLayer()
+        setState({ status: 'running', mode: 'test', liveView: addon !== null, testGameSize })
       }
       // Give the game keyboard focus semantics right away.
       session.sendNotification(NOTIFICATION.APPLICATION_FOCUS_IN)
@@ -424,6 +480,8 @@ export function stopGame(): void {
     layerhost()?.detach()
     layerAttached = false
   }
+  testContextId = null
+  testGameSize = null
   embedSession?.close()
   embedSession = null
   wheelAccumX = 0

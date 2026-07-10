@@ -3,7 +3,7 @@ import type { ChatAttachment, ChatModelTier, GameInputEvent, GitChange, InitialS
 import { normalizeGodotPath, resolveGodot, resolveOpencode } from './services/binaries'
 import { scanEcs } from './services/ecs'
 import * as files from './services/files'
-import { handleGameInput, openGodotEditor, playGame, setGameLayerVisible, setStageRect, stopGame } from './services/game'
+import { handleGameInput, openGodotEditor, playGame, setGameLayerVisible, setStageRect, setTestMonitorRect, stopGame } from './services/game'
 import * as git from './services/git'
 import {
   appendInputHistory,
@@ -118,6 +118,7 @@ export function registerIpcHandlers(): void {
   handle('game:stop', () => stopGame())
   // High-frequency fire-and-forget channels — plain listeners, no Result envelope.
   ipcMain.on('game:stageBounds', (_event, rect: StageRect) => setStageRect(rect))
+  ipcMain.on('game:testMonitorBounds', (_event, rect: StageRect) => setTestMonitorRect(rect))
   ipcMain.on('game:input', (_event, input: GameInputEvent) => handleGameInput(input))
   ipcMain.on('game:layerVisible', (_event, visible: boolean) => setGameLayerVisible(Boolean(visible)))
   handle('game:locateGodot', async (): Promise<string | null> => {

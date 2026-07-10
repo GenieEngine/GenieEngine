@@ -239,6 +239,12 @@ export interface GameState {
   status: 'stopped' | 'starting' | 'running'
   /** 'native' = embedded in the game view; 'test' = AI running it off-screen. */
   mode?: 'native' | 'test'
+  /** Test runs: true when the off-screen game can be mirrored live into the
+   *  test monitor (layerhost addon available — macOS). */
+  liveView?: boolean
+  /** Test runs: the size the off-screen game renders at, so the live monitor
+   *  box can reserve a matching shape. */
+  testGameSize?: { width: number; height: number }
 }
 
 /** Viewport-relative rect of the game stage area, reported by the renderer. */
@@ -347,6 +353,9 @@ export interface OpenGenieApi {
   locateGodot(): Promise<Result<string | null>>
   /** Fire-and-forget: keeps the main process aware of where the stage is. */
   setGameStageBounds(rect: StageRect): void
+  /** Fire-and-forget: where the AI test run's live monitor box sits, so the
+   *  off-screen game's layer can be composited (scaled down) into it. */
+  setTestMonitorBounds(rect: StageRect): void
   /** Fire-and-forget: input captured over the embedded native game view. */
   sendGameInput(event: GameInputEvent): void
   /**

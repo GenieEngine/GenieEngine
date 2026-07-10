@@ -1729,6 +1729,28 @@ button:disabled {
   margin-top: 6px;
 }
 
+/* Live test monitor: the main process composites the off-screen game into
+   the screen box as a scaled-down native layer. The shell's padding keeps
+   that (square-cornered) layer clear of the rounded corners; its black
+   background shows through as letterboxing. */
+.game-running-card.live {
+  max-width: min(88%, 860px);
+  width: 100%;
+}
+.test-monitor-shell {
+  width: 100%;
+  padding: 8px;
+  background: #000;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  margin-top: 6px;
+}
+.test-monitor-screen {
+  width: 100%;
+  max-height: 55vh;
+  margin: 0 auto;
+}
+
 .thinking-line {
   display: flex;
   align-items: center;

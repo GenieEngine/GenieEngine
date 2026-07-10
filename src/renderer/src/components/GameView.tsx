@@ -90,6 +90,41 @@ function NativeGameOverlay(): React.JSX.Element {
   )
 }
 
+/**
+ * Live monitor for an AI test run. The off-screen game is composited into
+ * this box by the main process as a scaled-down native layer (above the web
+ * contents, like normal embedded play) — this element only reserves a
+ * matching shape and reports where it sits. It takes no input: the native
+ * layer hit-tests nil and no input overlay is mounted, so the AI's run
+ * can't be disturbed by clicks.
+ */
+function TestLiveMonitor({ gameSize }: { gameSize: { width: number; height: number } }): React.JSX.Element {
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const report = (): void => {
+      const rect = el.getBoundingClientRect()
+      // Hidden behind another center tab (display:none → 0×0) — skip; a real
+      // rect is re-reported when the tab becomes visible again.
+      if (rect.width < 2 || rect.height < 2) return
+      window.api.setTestMonitorBounds({ x: rect.x, y: rect.y, width: rect.width, height: rect.height })
+    }
+    report()
+    const observer = new ResizeObserver(report)
+    observer.observe(el)
+    // The centered box MOVES without resizing when the window resizes (its
+    // width is capped) — watching the body catches those shifts too.
+    observer.observe(document.body)
+    return () => observer.disconnect()
+  }, [])
+  return (
+    <div className="test-monitor-shell">
+      <div ref={ref} className="test-monitor-screen" style={{ aspectRatio: `${gameSize.width} / ${gameSize.height}` }} />
+    </div>
+  )
+}
+
 interface Props {
   state: GameState
   error: string | null
@@ -233,16 +268,23 @@ export function GameView({
       )
     }
     if (state.status === 'running' && state.mode === 'test') {
+      const live = state.liveView === true && state.testGameSize !== undefined
       return (
-        <div className="game-running-card">
+        <div className={live ? 'game-running-card live' : 'game-running-card'}>
           <span className="status-dot starting big" />
           <h2>AI test run in progress</h2>
           <p className="muted">
-            {testShot
-              ? 'Latest screenshot the assistant captured:'
-              : 'The assistant is running your game off-screen — playing it, taking screenshots and checking its state.'}
+            {live
+              ? 'Watch live as the assistant plays your game and checks its state.'
+              : testShot
+                ? 'Latest screenshot the assistant captured:'
+                : 'The assistant is running your game off-screen — playing it, taking screenshots and checking its state.'}
           </p>
-          {testShot && <img className="test-monitor" src={testShot} alt="Latest AI test screenshot" />}
+          {live ? (
+            <TestLiveMonitor gameSize={state.testGameSize!} />
+          ) : (
+            testShot && <img className="test-monitor" src={testShot} alt="Latest AI test screenshot" />
+          )}
           <button className="btn btn-stop" onClick={onStop}>
             <StopIcon size={12} /> Stop
           </button>

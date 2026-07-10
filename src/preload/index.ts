@@ -29,6 +29,7 @@ const api: OpenGenieApi = {
   stopGame: () => invoke('game:stop'),
   locateGodot: () => invoke('game:locateGodot'),
   setGameStageBounds: (rect) => ipcRenderer.send('game:stageBounds', rect),
+  setTestMonitorBounds: (rect) => ipcRenderer.send('game:testMonitorBounds', rect),
   sendGameInput: (event) => ipcRenderer.send('game:input', event),
   setGameLayerVisible: (visible) => ipcRenderer.send('game:layerVisible', visible),
   onGameLog: (cb) => subscribe('game:log', cb),
