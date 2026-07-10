@@ -92,35 +92,66 @@ function NativeGameOverlay(): React.JSX.Element {
 
 /**
  * Live monitor for an AI test run. The off-screen game is composited into
- * this box by the main process as a scaled-down native layer (above the web
- * contents, like normal embedded play) — this element only reserves a
- * matching shape and reports where it sits. It takes no input: the native
- * layer hit-tests nil and no input overlay is mounted, so the AI's run
- * can't be disturbed by clicks.
+ * the screen box by the main process as a scaled-down native layer (above
+ * the web contents, like normal embedded play) — this element letterbox-fits
+ * the screen into the flexible monitor area and reports where it sits. It
+ * takes no input: the native layer hit-tests nil and no input overlay is
+ * mounted, so the AI's run can't be disturbed by clicks.
  */
 function TestLiveMonitor({ gameSize }: { gameSize: { width: number; height: number } }): React.JSX.Element {
-  const ref = useRef<HTMLDivElement>(null)
+  const areaRef = useRef<HTMLDivElement>(null)
+  const screenRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
-    const el = ref.current
-    if (!el) return
-    const report = (): void => {
-      const rect = el.getBoundingClientRect()
+    const area = areaRef.current
+    const screen = screenRef.current
+    const shell = screen?.parentElement
+    if (!area || !screen || !shell) return
+    const layout = (): void => {
+      const rect = area.getBoundingClientRect()
       // Hidden behind another center tab (display:none → 0×0) — skip; a real
       // rect is re-reported when the tab becomes visible again.
       if (rect.width < 2 || rect.height < 2) return
-      window.api.setTestMonitorBounds({ x: rect.x, y: rect.y, width: rect.width, height: rect.height })
+      // The shell's bezel (padding + border) around the screen, whatever the
+      // stylesheet currently says.
+      const chromeX = shell.offsetWidth - screen.offsetWidth
+      const chromeY = shell.offsetHeight - screen.offsetHeight
+      const scale = Math.min((rect.width - chromeX) / gameSize.width, (rect.height - chromeY) / gameSize.height)
+      const width = Math.floor(gameSize.width * scale)
+      const height = Math.floor(gameSize.height * scale)
+      if (width < 8 || height < 8) {
+        // No room (e.g. the console dragged almost to the top) — a 0-rect
+        // tells the main process to park the layer off-screen.
+        screen.style.width = '0px'
+        screen.style.height = '0px'
+        window.api.setTestMonitorBounds({ x: 0, y: 0, width: 0, height: 0 })
+        return
+      }
+      screen.style.width = `${width}px`
+      screen.style.height = `${height}px`
+      // The shell centers in the area, so the screen's final rect is known
+      // now — no need to wait for the style to be laid out.
+      window.api.setTestMonitorBounds({
+        x: rect.x + (rect.width - width) / 2,
+        y: rect.y + (rect.height - height) / 2,
+        width,
+        height
+      })
     }
-    report()
-    const observer = new ResizeObserver(report)
-    observer.observe(el)
-    // The centered box MOVES without resizing when the window resizes (its
-    // width is capped) — watching the body catches those shifts too.
-    observer.observe(document.body)
+    layout()
+    const observer = new ResizeObserver(layout)
+    observer.observe(area)
+    // The area only RESIZES for height changes; sidebar/window drags can MOVE
+    // it without resizing (the card's width is capped). Every such move comes
+    // from a stage resize, so watching the stage catches them all.
+    const stage = area.closest('.game-stage')
+    if (stage) observer.observe(stage)
     return () => observer.disconnect()
-  }, [])
+  }, [gameSize])
   return (
-    <div className="test-monitor-shell">
-      <div ref={ref} className="test-monitor-screen" style={{ aspectRatio: `${gameSize.width} / ${gameSize.height}` }} />
+    <div ref={areaRef} className="test-monitor-area">
+      <div className="test-monitor-shell">
+        <div ref={screenRef} className="test-monitor-screen" />
+      </div>
     </div>
   )
 }

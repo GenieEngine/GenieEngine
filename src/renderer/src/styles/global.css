@@ -1730,25 +1730,35 @@ button:disabled {
 }
 
 /* Live test monitor: the main process composites the off-screen game into
-   the screen box as a scaled-down native layer. The shell's padding keeps
-   that (square-cornered) layer clear of the rounded corners; its black
-   background shows through as letterboxing. */
+   the screen box as a scaled-down native layer; TestLiveMonitor sizes the
+   screen (in px) to letterbox-fit the game into the monitor area. The card
+   fills the stage and the area absorbs the leftover height, so the layer and
+   the Stop button track every window/sidebar/console resize instead of
+   overflowing onto the console. */
 .game-running-card.live {
   max-width: min(88%, 860px);
   width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
 }
+.test-monitor-area {
+  /* Basis 0: the area takes exactly the leftover card height, independent of
+     its content — sizing the screen from its rect can never feed back. */
+  flex: 1 1 0;
+  min-height: 0;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+/* Bezel around the screen: its padding keeps the (square-cornered) native
+   layer clear of the rounded corners; black shows through as letterboxing. */
 .test-monitor-shell {
-  width: 100%;
   padding: 8px;
   background: #000;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius);
-  margin-top: 6px;
-}
-.test-monitor-screen {
-  width: 100%;
-  max-height: 55vh;
-  margin: 0 auto;
 }
 
 .thinking-line {

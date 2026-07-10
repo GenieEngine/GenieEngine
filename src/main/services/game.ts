@@ -243,6 +243,13 @@ function updateTestMonitorLayer(): void {
   const addon = layerhost()
   const win = getMainWindow()
   if (!addon || !win || state.mode !== 'test' || testContextId === null || !testMonitorRect || !testGameSize) return
+  if (testMonitorRect.width < 8 || testMonitorRect.height < 8) {
+    // The renderer reports a 0-rect when the layout has no room for the
+    // monitor — park the attached layer off-screen rather than leaving it at
+    // a stale position over other UI (DOM can't cover a native layer).
+    if (layerAttached) addon.setFrame(-100000, -100000, 1, 1)
+    return
+  }
   const scale = Math.min(testMonitorRect.width / testGameSize.width, testMonitorRect.height / testGameSize.height)
   const width = testGameSize.width * scale
   const height = testGameSize.height * scale
