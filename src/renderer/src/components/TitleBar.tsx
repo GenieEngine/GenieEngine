@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { AspectMode, GameState, ProjectInfo } from '../../../shared/types'
 import logo from '../assets/logo.png'
 import { AdvancedToggle } from './AdvancedToggle'
+import { DiscordButton } from './DiscordButton'
 import {
   AspectAnyIcon,
   CheckIcon,
@@ -173,6 +174,7 @@ export function TitleBar({
             {status !== 'running' ? 'Starting…' : gameState.mode === 'test' ? 'AI testing' : 'Running'}
           </span>
         )}
+        {project && <DiscordButton />}
         {project && <AdvancedToggle value={advancedMode} onChange={onToggleAdvancedMode} />}
         {project && (
           <button

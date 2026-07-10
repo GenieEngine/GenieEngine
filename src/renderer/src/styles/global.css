@@ -314,6 +314,24 @@ button:disabled {
   font-size: 11.5px;
 }
 
+/* Discord's blurple. The bundled icon is an opaque image with this exact
+   background color, so the white mark reads as transparent on the button.
+   Hover brightens via filter (not background) to keep the two in lockstep. */
+.btn-discord {
+  background: #5865f2;
+  color: #fff;
+  text-decoration: none;
+}
+.btn-discord:hover {
+  filter: brightness(1.1);
+}
+
+.discord-mark {
+  height: 14px;
+  width: auto;
+  display: block;
+}
+
 .btn-lg {
   padding: 10px 20px;
   font-size: 13.5px;
@@ -490,7 +508,7 @@ button:disabled {
 }
 
 .welcome-card {
-  width: 480px;
+  width: 624px;
   max-width: 90%;
   display: flex;
   flex-direction: column;
