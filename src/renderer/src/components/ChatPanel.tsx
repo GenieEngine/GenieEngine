@@ -492,6 +492,15 @@ export function ChatPanel({ projectPath, opencodeAvailable, onAssistantDone }: P
   const fileInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const onDoneRef = useRef(onAssistantDone)
+  // Grow the composer with its content, up to the CSS max-height (then it
+  // scrolls). Keyed on `input` so every way the text changes resizes it —
+  // including the clear on send, which snaps it back to the rows default.
+  useEffect(() => {
+    const ta = textareaRef.current
+    if (!ta) return
+    ta.style.height = ''
+    if (ta.scrollHeight > ta.clientHeight) ta.style.height = `${ta.scrollHeight}px`
+  }, [input])
   onDoneRef.current = onAssistantDone
   // Live mirror of `messages` for handlers that read it after an await —
   // /undo may abort a streaming turn first, and the resulting "Stopped."

@@ -31,6 +31,9 @@ let nativeProcess: ChildProcess | null = null
 // Native embedded-session state
 let embedSession: EmbedSession | null = null
 let layerAttached = false
+// Renderer's last requested layer visibility — remembered so a layer that
+// attaches while something covers the stage (modal, ECS tab) starts hidden.
+let layerVisibleWanted = true
 let stageRect: StageRect | null = null
 
 // The project that currently has the agent (test-agent.ts) injected — set for
@@ -213,9 +216,11 @@ export function setStageRect(rect: StageRect): void {
 /**
  * Hide/show the embedded game layer. The OS composites it above the web
  * contents, so the renderer can't cover it with DOM — it asks us to hide it
- * while another center tab (e.g. the ECS viewer) occupies the stage.
+ * while another center tab (e.g. the ECS viewer) or a modal overlay
+ * (settings, export) occupies the stage.
  */
 export function setGameLayerVisible(visible: boolean): void {
+  layerVisibleWanted = visible
   if (layerAttached) layerhost()?.setVisible(visible)
 }
 
@@ -318,6 +323,9 @@ async function playNativeEmbedded(godot: string, projectPath: string, visible: b
       if (visible) {
         addon!.attach(win.getNativeWindowHandle(), contextId, rect.x, rect.y, rect.width, rect.height)
         layerAttached = true
+        // attach() shows the layer; honor the renderer's requested visibility
+        // in case a modal opened before the game finished launching.
+        if (!layerVisibleWanted) addon!.setVisible(false)
         emitLog('[opengenie] game embedded in the OpenGenie window (native, full performance)')
         setState({ status: 'running', mode: 'native' })
       } else {
