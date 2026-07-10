@@ -4,11 +4,12 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type {
   AssetPreview,
   ChatAttachment,
+  ChatModelTier,
   ChatPartUpdate,
   ChatQuestionRequest,
   ChatToolStatus
 } from '../../../shared/types'
-import { FileIcon, PlusIcon, SearchIcon, SendIcon, SparkIcon, StopIcon, TerminalIcon, XIcon } from './Icons'
+import { FileIcon, FolderIcon, PlusIcon, SearchIcon, SendIcon, SparkIcon, StopIcon, TerminalIcon, XIcon } from './Icons'
 
 marked.setOptions({ gfm: true, breaks: true })
 
@@ -22,7 +23,7 @@ interface AssistantPart {
   id: string
   kind: 'text' | 'reasoning' | 'tool' | 'image' | 'asset'
   text: string
-  tool?: { name: string; status: ChatToolStatus; title?: string; error?: string }
+  tool?: { name: string; status: ChatToolStatus; title?: string; error?: string; agent?: string }
   dataUrl?: string
   /** For kind 'asset': the generated 2D/3D asset preview the user can react to. */
   asset?: AssetPreview
@@ -39,16 +40,40 @@ interface ChatMessage {
   streaming?: boolean
 }
 
-// Attachments cap: data URLs ride the message to the model; keep them sane.
+// Inline attachments cap: data URLs ride the message to the model; keep them sane.
 const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024
 
-// What the assistant can digest. The file-picker enforces this via `accept`;
-// drag & drop bypasses that, so addFiles re-checks against the same list.
+// What the assistant can digest inline. The file-picker enforces this via
+// `accept`; drag & drop bypasses that, so addFiles re-checks the same lists.
 const ATTACH_EXTENSIONS = ['.txt', '.md', '.json', '.gd', '.tscn', '.cfg', '.csv', '.log', '.pdf']
-const ATTACH_ACCEPT = ['image/*', ...ATTACH_EXTENSIONS].join(',')
+
+// Asset uploads: archives and 2D/3D asset files too big or too binary to ride
+// the message as data URLs. They attach by disk path — on send the main
+// process copies them into the project's .genieengine/attachments/ and points
+// the assistant there (see saveChatUploads). Dropped/picked folders always
+// take this route. Checked against the same 512 MB cap the main process
+// enforces; folders can only be measured there, so theirs waits until send.
+const UPLOAD_EXTENSIONS = [
+  '.zip',
+  '.glb', '.gltf', '.obj', '.fbx', '.dae', '.stl', '.blend',
+  '.wav', '.ogg', '.mp3',
+  '.ttf', '.otf'
+]
+const MAX_UPLOAD_BYTES = 512 * 1024 * 1024
+const ATTACH_ACCEPT = ['image/*', ...ATTACH_EXTENSIONS, ...UPLOAD_EXTENSIONS].join(',')
 
 function isAttachable(file: File): boolean {
   return file.type.startsWith('image/') || ATTACH_EXTENSIONS.some((ext) => file.name.toLowerCase().endsWith(ext))
+}
+
+function isUpload(file: File): boolean {
+  return UPLOAD_EXTENSIONS.some((ext) => file.name.toLowerCase().endsWith(ext))
+}
+
+/** A picked/dropped file plus what only the drop event can know: folder-ness. */
+interface IncomingFile {
+  file: File
+  dir: boolean
 }
 
 /**
@@ -132,12 +157,28 @@ const SUGGESTIONS = [
   'Give the game a title screen with a start button'
 ]
 
+/**
+ * The chat model picker (persisted app-wide, like the sidebar width). Both
+ * tiers continue the same conversation — the model named on each message is
+ * the only thing that changes — so switching mid-chat loses nothing.
+ */
+const MODEL_TIER_KEY = 'genieengine:chatModelTier'
+
+const MODEL_TIERS: { id: ChatModelTier; label: string }[] = [
+  { id: 'medium', label: 'Medium' },
+  { id: 'large', label: 'Large' }
+]
+
 interface SlashCommand {
   name: string
   description: string
 }
 
-const SLASH_COMMANDS: SlashCommand[] = [{ name: 'clear', description: 'Clear the chat history' }]
+const SLASH_COMMANDS: SlashCommand[] = [
+  { name: 'clear', description: 'Clear the chat history' },
+  { name: 'undo', description: 'Undo your last message and the file changes it made' },
+  { name: 'redo', description: 'Restore the last undone message' }
+]
 
 /**
  * The text qualifies as a slash-command query only while it looks like one:
@@ -159,14 +200,16 @@ function toolIcon(name: string): React.JSX.Element {
 }
 
 /** Compact label for a tool chip: the tool name plus a shortened target. */
-function toolLabel(tool: { name: string; title?: string }): string {
+function toolLabel(tool: { name: string; title?: string; agent?: string }): string {
   let title = tool.title ?? ''
   if (title.includes('/')) {
     title = title.split('/').filter(Boolean).slice(-2).join('/')
   }
   if (title.length > 40) title = title.slice(0, 39) + '…'
-  const name = tool.name.replace(/^opengenie_/, '')
-  return title ? `${name} · ${title}` : name
+  const name = tool.name.replace(/^genieengine_/, '')
+  const label = title ? `${name} · ${title}` : name
+  // Subagent calls carry their agent so delegated work reads as such.
+  return tool.agent ? `${tool.agent} → ${label}` : label
 }
 
 /**
@@ -188,7 +231,7 @@ function ToolChip({ part }: { part: AssistantPart }): React.JSX.Element {
   // Failed calls explain themselves on hover (native tooltip).
   const tooltip = status === 'error' ? `Failed: ${part.tool?.error || 'no error details reported'}` : undefined
   return (
-    <span className={`tool-chip ${status}`} title={tooltip}>
+    <span className={`tool-chip ${status}${part.tool?.agent ? ' subagent' : ''}`} title={tooltip}>
       <span className="tool-chip-icon">{toolIcon(part.tool?.name ?? '')}</span>
       <span className="tool-chip-label">{toolLabel(part.tool ?? { name: 'tool' })}</span>
       <span className="tool-chip-status">
@@ -410,6 +453,15 @@ export function ChatPanel({ projectPath, opencodeAvailable, onAssistantDone }: P
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)
+  // Which chat model answers the next message (Medium = everyday, Large =
+  // tough tasks). Applies from the next send; an in-flight turn is unaffected.
+  const [modelTier, setModelTier] = useState<ChatModelTier>(() =>
+    localStorage.getItem(MODEL_TIER_KEY) === 'large' ? 'large' : 'medium'
+  )
+  const pickModelTier = (tier: ChatModelTier): void => {
+    localStorage.setItem(MODEL_TIER_KEY, tier)
+    setModelTier(tier)
+  }
   const [slashIndex, setSlashIndex] = useState(0)
   const [slashDismissed, setSlashDismissed] = useState(false)
   const [attachments, setAttachments] = useState<ChatAttachment[]>([])
@@ -440,12 +492,33 @@ export function ChatPanel({ projectPath, opencodeAvailable, onAssistantDone }: P
   const fileInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const onDoneRef = useRef(onAssistantDone)
+  // Grow the composer with its content, up to the CSS max-height (then it
+  // scrolls). Keyed on `input` so every way the text changes resizes it —
+  // including the clear on send, which snaps it back to the rows default.
+  useEffect(() => {
+    const ta = textareaRef.current
+    if (!ta) return
+    ta.style.height = ''
+    if (ta.scrollHeight > ta.clientHeight) ta.style.height = `${ta.scrollHeight}px`
+  }, [input])
   onDoneRef.current = onAssistantDone
+  // Live mirror of `messages` for handlers that read it after an await —
+  // /undo may abort a streaming turn first, and the resulting "Stopped."
+  // notice must be part of what gets sliced away.
+  const messagesRef = useRef<ChatMessage[]>(messages)
+  messagesRef.current = messages
+  // Turns removed by /undo, newest last; /redo pops and re-appends. Renderer
+  // state is the only copy — the saved transcript is overwritten on undo — so
+  // redo reaches exactly as far back as the undos of this app run. Cleared
+  // whenever the conversation moves on (send, /clear, project switch), which
+  // mirrors OpenCode dropping its revert point on the next message.
+  const redoStackRef = useRef<ChatMessage[][]>([])
 
   // Restore this project's transcript and recall history when it opens (the
   // main process also resumes the saved AI session so context carries over).
   useEffect(() => {
     let alive = true
+    redoStackRef.current = [] // undone turns belong to the previous project's chat
     void window.api.chatLoadState(projectPath).then((result) => {
       if (!alive) return
       if (result.ok) {
@@ -500,16 +573,34 @@ export function ChatPanel({ projectPath, opencodeAvailable, onAssistantDone }: P
     })
   }
 
-  const addFiles = async (files: FileList | null): Promise<void> => {
-    if (!files || files.length === 0) return
+  const addFiles = async (incoming: IncomingFile[]): Promise<void> => {
+    if (incoming.length === 0) return
     setAttachError(null)
     const next = [...attachments]
-    for (const file of Array.from(files)) {
+    for (const { file, dir } of incoming) {
+      // Folders and asset files (zips, models, audio…) attach by path — only
+      // their location crosses to the main process, which copies them into
+      // .genieengine/attachments/ when the message is sent.
+      if (dir || isUpload(file)) {
+        const path = window.api.pathForFile(file)
+        if (!path) {
+          setAttachError(`"${file.name}" has no location on disk, so it can't be attached.`)
+          continue
+        }
+        if (!dir && file.size > MAX_UPLOAD_BYTES) {
+          setAttachError(`"${file.name}" is over the ${MAX_UPLOAD_BYTES / 1024 / 1024} MB upload limit.`)
+          continue
+        }
+        if (!next.some((a) => a.path === path)) {
+          next.push({ name: file.name, mime: file.type || 'application/octet-stream', path, dir })
+        }
+        continue
+      }
       if (!isAttachable(file)) {
         setAttachError(`"${file.name}" isn't a supported attachment type.`)
         continue
       }
-      const total = next.reduce((n, a) => n + a.dataUrl.length, 0)
+      const total = next.reduce((n, a) => n + (a.dataUrl?.length ?? 0), 0)
       if (file.size > MAX_ATTACHMENT_BYTES || total + file.size * 1.4 > MAX_ATTACHMENT_BYTES) {
         setAttachError('Attachments are limited to 8 MB per message.')
         break
@@ -521,6 +612,20 @@ export function ChatPanel({ projectPath, opencodeAvailable, onAssistantDone }: P
       })
     }
     setAttachments(next)
+  }
+
+  // Attach a whole folder of assets via the native directory picker (drag &
+  // drop is the only other way in — a plain <input type="file"> can't mix
+  // files and folders).
+  const attachFolder = async (): Promise<void> => {
+    const result = await window.api.chooseDirectory()
+    if (!result.ok || !result.data) return
+    const path = result.data
+    const name = path.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || path
+    setAttachError(null)
+    setAttachments((prev) =>
+      prev.some((a) => a.path === path) ? prev : [...prev, { name, mime: 'inode/directory', path, dir: true }]
+    )
   }
 
   useEffect(() => {
@@ -665,16 +770,38 @@ export function ChatPanel({ projectPath, opencodeAvailable, onAssistantDone }: P
     setInput('')
     setAttachments([])
     setAttachError(null)
+    // Moving the conversation forward makes any pending undo permanent
+    // (OpenCode trims the reverted messages on the next prompt).
+    redoStackRef.current = []
     setMessages((msgs) => [
       ...msgs,
       { id: crypto.randomUUID(), role: 'user', content: message, attachments: outgoing }
     ])
     setStreaming(true)
-    const result = await window.api.chatSend(message, outgoing)
+    const result = await window.api.chatSend(message, outgoing, modelTier)
     if (!result.ok) {
       setStreaming(false)
       setMessages((msgs) => [...msgs, { id: crypto.randomUUID(), role: 'error', content: result.error }])
     }
+  }
+
+  /** Notice bubble for a command that couldn't run (nothing to undo, …). */
+  const appendNotice = (content: string): void =>
+    setMessages((msgs) => [...msgs, { id: crypto.randomUUID(), role: 'error', content }])
+
+  /**
+   * Persist a transcript rewritten by /undo//redo right away, bypassing the
+   * debounced effect: it skips empty arrays (mount protection), but undoing
+   * back to an empty chat must still overwrite the saved file or the undone
+   * turn would resurrect on the next open.
+   */
+  const commitRewrite = (next: ChatMessage[]): void => {
+    cancelPendingSave()
+    lastSavedRef.current = next
+    setMessages(next)
+    void window.api.chatSaveHistory(projectPath, stripEphemeral(next))
+    // The revert touched project files under the open views — refresh them.
+    onDoneRef.current()
   }
 
   const runCommand = async (command: SlashCommand): Promise<void> => {
@@ -686,12 +813,58 @@ export function ChatPanel({ projectPath, opencodeAvailable, onAssistantDone }: P
       // Also deletes the saved transcript (input history survives — ↑ still
       // recalls messages sent before the clear).
       await window.api.chatNewSession()
+      redoStackRef.current = []
       setMessages([])
       setStreaming(false)
       setQuestion(null)
       setInterrupted(false)
       setHistoryPos(null)
       draftRef.current = ''
+    }
+    if (command.name === 'undo') {
+      // The main process aborts a still-streaming turn first (native /undo
+      // behavior), reverts the OpenCode session one user turn, and restores
+      // the project files that turn changed.
+      const result = await window.api.chatUndo()
+      if (!result.ok) {
+        appendNotice(result.error)
+        return
+      }
+      // Drop the undone turn from the transcript. Assistant message ids are
+      // OpenCode message ids (time-ordered strings, unlike the local uuids on
+      // user bubbles), so the first assistant message newer than the
+      // reverted-to id marks the undone turn; the user bubble before it opens
+      // that turn. No such assistant message (the turn died before producing
+      // one, or a trailing send never reached the session) → the last user
+      // bubble is the one being undone. Slicing to the turn's start also
+      // sweeps the turn's error/"Stopped." notices.
+      const current = messagesRef.current
+      let cut = current.findIndex((m) => m.role === 'assistant' && m.id > result.data.revertedTo)
+      if (cut === -1) cut = current.length
+      let start = cut - 1
+      while (start >= 0 && current[start].role !== 'user') start--
+      if (start < 0) return // no matching turn on screen — leave the transcript alone
+      const removed = current.slice(start)
+      redoStackRef.current.push(removed)
+      commitRewrite(current.slice(0, start))
+      // The undone message returns to the (just-cleared) composer for editing.
+      const undone = removed.find((m) => m.role === 'user')
+      if (undone?.content) setInput(undone.content)
+    }
+    if (command.name === 'redo') {
+      if (redoStackRef.current.length === 0) {
+        appendNotice('Nothing to redo.')
+        return
+      }
+      const result = await window.api.chatRedo()
+      if (!result.ok) {
+        appendNotice(result.error)
+        return
+      }
+      // Steps forward in the same order the undos stepped back (LIFO), the
+      // same way the session's revert point just moved server-side.
+      const restored = redoStackRef.current.pop()!
+      commitRewrite([...messagesRef.current, ...restored])
     }
   }
 
@@ -724,13 +897,21 @@ export function ChatPanel({ projectPath, opencodeAvailable, onAssistantDone }: P
         e.preventDefault()
         dragDepth.current = 0
         setDragActive(false)
-        void addFiles(e.dataTransfer.files)
+        // dataTransfer.items is only readable synchronously during the event;
+        // webkitGetAsEntry is what tells a dropped folder apart from a file
+        // (the File object alone can't — folders arrive with size 0, type '').
+        const incoming: IncomingFile[] = []
+        for (const item of Array.from(e.dataTransfer.items)) {
+          const file = item.getAsFile()
+          if (file) incoming.push({ file, dir: item.webkitGetAsEntry?.()?.isDirectory ?? false })
+        }
+        void addFiles(incoming)
       }}
     >
       {dragActive && (
         <div className="drop-overlay">
           <PlusIcon size={22} />
-          <span>Drop files to attach</span>
+          <span>Drop files or folders to attach</span>
         </div>
       )}
       <div className="chat-body">
@@ -739,7 +920,7 @@ export function ChatPanel({ projectPath, opencodeAvailable, onAssistantDone }: P
           <div className="chat-empty">
             {!opencodeAvailable && (
               <div className="notice">
-                The bundled OpenCode assistant is missing. Reinstall OpenGenie, or run{' '}
+                The bundled OpenCode assistant is missing. Reinstall GenieEngine, or run{' '}
                 <code>npm run setup</code> in development.
               </div>
             )}
@@ -752,8 +933,8 @@ export function ChatPanel({ projectPath, opencodeAvailable, onAssistantDone }: P
               ))}
             </div>
             <p className="chat-hint">
-              Tip: type <code>/</code> for commands — <code>/clear</code> resets the chat. Press <code>↑</code> to
-              recall messages you sent before.
+              Tip: type <code>/</code> for commands — <code>/clear</code> resets the chat, <code>/undo</code> takes
+              back your last message and its changes. Press <code>↑</code> to recall messages you sent before.
             </p>
           </div>
         )}
@@ -774,11 +955,11 @@ export function ChatPanel({ projectPath, opencodeAvailable, onAssistantDone }: P
               {m.attachments && m.attachments.length > 0 && (
                 <div className="msg-attachments">
                   {m.attachments.map((a, j) =>
-                    a.mime.startsWith('image/') ? (
+                    a.dataUrl && a.mime.startsWith('image/') ? (
                       <img key={j} className="attach-thumb" src={a.dataUrl} alt={a.name} title={a.name} />
                     ) : (
-                      <span key={j} className="attach-file" title={a.name}>
-                        <FileIcon size={11} /> {a.name}
+                      <span key={j} className="attach-file" title={a.path ?? a.name}>
+                        {a.dir ? <FolderIcon size={11} /> : <FileIcon size={11} />} {a.name}
                       </span>
                     )
                   )}
@@ -851,9 +1032,11 @@ export function ChatPanel({ projectPath, opencodeAvailable, onAssistantDone }: P
           {(attachments.length > 0 || attachError) && (
             <div className="attach-row">
               {attachments.map((a, i) => (
-                <span key={i} className="attach-chip" title={a.name}>
-                  {a.mime.startsWith('image/') ? (
+                <span key={i} className="attach-chip" title={a.path ?? a.name}>
+                  {a.dataUrl && a.mime.startsWith('image/') ? (
                     <img className="attach-chip-thumb" src={a.dataUrl} alt="" />
+                  ) : a.dir ? (
+                    <FolderIcon size={11} />
                   ) : (
                     <FileIcon size={11} />
                   )}
@@ -956,17 +1139,41 @@ export function ChatPanel({ projectPath, opencodeAvailable, onAssistantDone }: P
               accept={ATTACH_ACCEPT}
               style={{ display: 'none' }}
               onChange={(e) => {
-                void addFiles(e.target.files)
+                void addFiles(Array.from(e.target.files ?? []).map((file) => ({ file, dir: false })))
                 e.target.value = ''
               }}
             />
-            <button
-              className="attach-btn"
-              title="Attach files or images — or drag & drop them into the chat (stay in the chat, not added to your game)"
-              onClick={() => fileInputRef.current?.click()}
-            >
-              <PlusIcon size={14} />
-            </button>
+            <div className="inputbar-tools">
+              <div className="attach-btns">
+                <button
+                  className="attach-btn"
+                  title="Attach files, images, or .zip asset packs — or drag & drop them (folders too) into the chat"
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  <PlusIcon size={14} />
+                </button>
+                <button
+                  className="attach-btn"
+                  title="Attach a folder of assets — uploaded for the assistant when you send"
+                  onClick={() => void attachFolder()}
+                >
+                  <FolderIcon size={13} />
+                </button>
+              </div>
+              <select
+                className="model-select"
+                value={modelTier}
+                title="Which chat model answers — Medium for everyday work, Large for tough tasks that need extra juice (may cost more). The conversation continues either way."
+                aria-label="Chat model"
+                onChange={(e) => pickModelTier(e.target.value === 'large' ? 'large' : 'medium')}
+              >
+                {MODEL_TIERS.map(({ id, label }) => (
+                  <option key={id} value={id}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </div>
             {streaming ? (
               <button className="send-btn stop" title="Stop" onClick={() => void window.api.chatCancel()}>
                 <StopIcon size={13} />

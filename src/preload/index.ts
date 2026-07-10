@@ -1,5 +1,5 @@
-import { contextBridge, ipcRenderer } from 'electron'
-import type { OpenGenieApi } from '../shared/types'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
+import type { GenieEngineApi } from '../shared/types'
 
 function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
   return ipcRenderer.invoke(channel, ...args) as Promise<T>
@@ -13,7 +13,7 @@ function subscribe(channel: string, cb: (...args: never[]) => void): () => void 
   return () => ipcRenderer.removeListener(channel, listener)
 }
 
-const api: OpenGenieApi = {
+const api: GenieEngineApi = {
   platform: process.platform,
 
   getInitialState: () => invoke('app:getInitialState'),
@@ -29,15 +29,29 @@ const api: OpenGenieApi = {
   stopGame: () => invoke('game:stop'),
   locateGodot: () => invoke('game:locateGodot'),
   setGameStageBounds: (rect) => ipcRenderer.send('game:stageBounds', rect),
+  setTestMonitorBounds: (rect) => ipcRenderer.send('game:testMonitorBounds', rect),
   sendGameInput: (event) => ipcRenderer.send('game:input', event),
   setGameLayerVisible: (visible) => ipcRenderer.send('game:layerVisible', visible),
   onGameLog: (cb) => subscribe('game:log', cb),
   onGameState: (cb) => subscribe('game:state', cb),
   onGameCursor: (cb) => subscribe('game:cursor', cb),
   onGameTestShot: (cb) => subscribe('game:test-shot', cb),
+  onGameFps: (cb) => subscribe('game:fps', cb),
 
-  chatSend: (message, attachments) => invoke('chat:send', message, attachments),
+  chatSend: (message, attachments, tier) => invoke('chat:send', message, attachments, tier),
+  // File objects lost their .path in modern Electron — this is the sanctioned
+  // way for the renderer to learn where a dropped/picked file lives on disk
+  // (asset uploads travel by path, not by value; see ChatAttachment).
+  pathForFile: (file) => {
+    try {
+      return webUtils.getPathForFile(file)
+    } catch {
+      return '' // synthesized Files have no disk path
+    }
+  },
   chatCancel: () => invoke('chat:cancel'),
+  chatUndo: () => invoke('chat:undo'),
+  chatRedo: () => invoke('chat:redo'),
   chatNewSession: () => invoke('chat:new'),
   chatLoadState: (projectPath) => invoke('chat:loadState', projectPath),
   chatSaveHistory: (projectPath, messages) => invoke('chat:saveHistory', projectPath, messages),
@@ -45,8 +59,7 @@ const api: OpenGenieApi = {
   chatAnswerQuestion: (requestID, answers) => invoke('chat:answerQuestion', requestID, answers),
   chatRejectQuestion: (requestID) => invoke('chat:rejectQuestion', requestID),
   getSetupStatus: () => invoke('chat:setupStatus'),
-  saveSetup: (endpoint, model, apiKey, tencentSecretId, tencentSecretKey, openaiApiKey) =>
-    invoke('chat:saveSetup', endpoint, model, apiKey, tencentSecretId, tencentSecretKey, openaiApiKey),
+  saveSetup: (request) => invoke('chat:saveSetup', request),
   onChatPart: (cb) => subscribe('chat:part', cb),
   onChatDone: (cb) => subscribe('chat:done', cb),
   onAssetPreview: (cb) => subscribe('chat:asset-preview', cb),

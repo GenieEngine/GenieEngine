@@ -4,7 +4,7 @@ import { frameMessage, GdVector2i, MessageReader, type DebuggerMessage } from '.
 /**
  * Debug-protocol session with an embedded Godot game (macOS, Godot 4.6+).
  *
- * OpenGenie acts as the "editor" side of Godot's remote debugger: the game is
+ * GenieEngine acts as the "editor" side of Godot's remote debugger: the game is
  * launched with `--embedded --remote-debug tcp://127.0.0.1:<port>` which makes
  * it render into a cross-process CAContext instead of opening a window. Over
  * this channel the game reports its CAContext id (displayed in-window via the
@@ -46,6 +46,8 @@ export interface EmbedSessionCallbacks {
   onDisconnect(): void
   /** Reply from the injected test agent: `ogtest:done` → [id, ok, text]. */
   onTestReply?(id: number, ok: boolean, text: string): void
+  /** ~1/s frame-timing batch from the injected agent: `ogperf:frames` → deltas in seconds. */
+  onPerfFrames?(deltas: number[]): void
 }
 
 export class EmbedSession {
@@ -105,6 +107,13 @@ export class EmbedSession {
           String(message.data[2] ?? '')
         )
         break
+      case 'ogperf:frames': {
+        const deltas = message.data[0]
+        if (Array.isArray(deltas)) {
+          this.callbacks.onPerfFrames?.(deltas.filter((d): d is number => typeof d === 'number'))
+        }
+        break
+      }
       case 'debug_enter':
         // A breakpoint/error pause would freeze the game with no debugger UI
         // attached — resume immediately.

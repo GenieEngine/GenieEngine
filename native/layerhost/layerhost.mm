@@ -4,7 +4,7 @@
 // view on macOS (see platform/macos/editor/embedded_process_macos.mm).
 //
 // The hosting NSView returns nil from hitTest so all input continues to flow
-// to Electron's web contents; OpenGenie forwards input to the game over the
+// to Electron's web contents; GenieEngine forwards input to the game over the
 // debugger channel.
 
 #import <AppKit/AppKit.h>
@@ -138,6 +138,26 @@ static napi_value SetFrame(napi_env env, napi_callback_info info) {
   return nullptr;
 }
 
+// setScale(scale) — scale the hosted tree (the AI test run's live monitor
+// shows the full-size off-screen game shrunk into a small box). The host
+// layer has zero-size bounds, so the transform scales about its position —
+// the view's top-left — keeping the remote content anchored there.
+static napi_value SetScale(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value args[1];
+  NAPI_CALL(env, napi_get_cb_info(env, info, &argc, args, nullptr, nullptr));
+  if (g_layerHost && argc >= 1) {
+    CGFloat s = GetNumberArg(env, args[0]);
+    if (s > 0) {
+      [CATransaction begin];
+      [CATransaction setDisableActions:YES];
+      g_layerHost.transform = CATransform3DMakeScale(s, s, 1);
+      [CATransaction commit];
+    }
+  }
+  return nullptr;
+}
+
 // setVisible(visible: boolean)
 static napi_value SetVisible(napi_env env, napi_callback_info info) {
   size_t argc = 1;
@@ -167,6 +187,8 @@ static napi_value Init(napi_env env, napi_value exports) {
   napi_set_named_property(env, exports, "attach", fn);
   napi_create_function(env, "setFrame", NAPI_AUTO_LENGTH, SetFrame, nullptr, &fn);
   napi_set_named_property(env, exports, "setFrame", fn);
+  napi_create_function(env, "setScale", NAPI_AUTO_LENGTH, SetScale, nullptr, &fn);
+  napi_set_named_property(env, exports, "setScale", fn);
   napi_create_function(env, "setVisible", NAPI_AUTO_LENGTH, SetVisible, nullptr, &fn);
   napi_set_named_property(env, exports, "setVisible", fn);
   napi_create_function(env, "detach", NAPI_AUTO_LENGTH, Detach, nullptr, &fn);

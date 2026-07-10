@@ -66,13 +66,23 @@ export interface ChatDonePayload {
 }
 
 /**
- * A file the user attached to a chat message. Sent to the model as a message
- * part (data URL) — never written into the game project.
+ * A file the user attached to a chat message. Two flavors:
+ *
+ * - Inline (`dataUrl` set): images and small text files — ride the chat
+ *   message itself as data-URL parts, never written into the game project.
+ * - Asset upload (`path` set): .zip archives, whole folders, and binary asset
+ *   files (3D models, audio, fonts) — too big/opaque to inline, so only the
+ *   absolute disk path crosses to the main process, which copies the payload
+ *   into the project's .genieengine/attachments/ when the message is sent and
+ *   points the assistant at it there.
  */
 export interface ChatAttachment {
   name: string
   mime: string
-  dataUrl: string
+  dataUrl?: string
+  path?: string
+  /** True when `path` points at a folder. */
+  dir?: boolean
 }
 
 /**
@@ -116,17 +126,77 @@ export interface ChatQuestionRequest {
   questions: ChatQuestion[]
 }
 
-/** State of the AI provider setup (API key / endpoint / model). */
-export interface SetupStatus {
-  /** True once the configured endpoint has a usable credential. */
-  configured: boolean
-  /** Base URL of the OpenAI-compatible API the coding agent talks to. */
+/**
+ * Which chat model a message runs on: the everyday Medium model or the
+ * heavyweight Large model for tough tasks (more capable, may cost more).
+ * The image model is not a tier — it only powers the image subagents.
+ */
+export type ChatModelTier = 'medium' | 'large'
+
+/**
+ * Whether the model should think before answering. Sent to the model as the
+ * standard OpenAI-format `thinking: {"type": "enabled"|"disabled"}` request
+ * field (see https://api-docs.deepseek.com/guides/thinking_mode/);
+ * 'default' sends nothing and leaves the model on its own default.
+ */
+export type ThinkingMode = 'default' | 'enabled' | 'disabled'
+
+/**
+ * How hard the model should think, sent as the standard OpenAI-format
+ * `reasoning_effort` request field; 'default' sends nothing.
+ */
+export type ReasoningEffort = 'default' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+
+/** One model slot's stored connection settings, as shown in the setup panel. */
+export interface ModelSlotStatus {
+  /** Base URL of the OpenAI-compatible API this model is served from. */
   endpoint: string
   model: string
+  /** True once this model's endpoint has a usable credential. */
+  configured: boolean
+  thinking: ThinkingMode
+  effort: ReasoningEffort
+}
+
+/** State of the AI provider setup (API keys / endpoints / models). */
+export interface SetupStatus {
+  /** True once both chat models are usable (the chat dropdown can switch between them any time). */
+  configured: boolean
+  /** Everyday chat/coding model. */
+  medium: ModelSlotStatus
+  /** Heavyweight chat model for tough tasks. */
+  large: ModelSlotStatus
+  /** Image-enabled model that powers the image-reader and game-tester subagents. */
+  image: ModelSlotStatus
   /** True when Tencent HY 3D credentials are stored (enables 3D asset generation). */
   hy3dConfigured: boolean
   /** True when an OpenAI key is stored (enables 2D image asset generation). */
   gptImageConfigured: boolean
+}
+
+/** One model slot's settings as submitted by the setup panel. */
+export interface ModelSlotRequest {
+  endpoint: string
+  model: string
+  /** Blank = keep the stored key (or share the Medium model's key on a matching endpoint). */
+  apiKey: string
+  thinking: ThinkingMode
+  effort: ReasoningEffort
+}
+
+/**
+ * Everything the AI settings panel saves in one go. Blank credential fields
+ * mean "leave the stored key unchanged"; blank endpoints/models fall back to
+ * the defaults.
+ */
+export interface SetupRequest {
+  medium: ModelSlotRequest
+  large: ModelSlotRequest
+  image: ModelSlotRequest
+  /** Optional asset-generation credentials (blank = unchanged). */
+  tencentSecretId?: string
+  tencentSecretKey?: string
+  openaiApiKey?: string
 }
 
 /** A generated asset preview pushed into the chat so the user can react to it. */
@@ -159,6 +229,8 @@ export interface ChatPartUpdate {
     title?: string
     /** Failure reason when status is 'error' — tooltip on the chip. */
     error?: string
+    /** Set when a subagent (game-tester, image-reader) ran this tool — the chip is labelled with it. */
+    agent?: string
   }
 }
 
@@ -167,6 +239,12 @@ export interface GameState {
   status: 'stopped' | 'starting' | 'running'
   /** 'native' = embedded in the game view; 'test' = AI running it off-screen. */
   mode?: 'native' | 'test'
+  /** Test runs: true when the off-screen game can be mirrored live into the
+   *  test monitor (layerhost addon available — macOS). */
+  liveView?: boolean
+  /** Test runs: the size the off-screen game renders at, so the live monitor
+   *  box can reserve a matching shape. */
+  testGameSize?: { width: number; height: number }
 }
 
 /** Viewport-relative rect of the game stage area, reported by the renderer. */
@@ -190,9 +268,9 @@ export type ExportProgress =
   | { phase: 'done'; message?: string }
 
 /**
- * A code file with a parsed `#=== opengenie ===` header block (the format
- * AGENTS.md mandates for every file the AI writes — see templates.ts).
- * Backs the ECS viewer in the center pane.
+ * A code file with a parsed `#=== genieengine ===` header block (the format the
+ * injected agent instructions mandate for every file the AI writes — see
+ * resources/agent-instructions.md). Backs the ECS viewer in the center pane.
  */
 export interface EcsNode {
   /** Project-relative path, e.g. "components/c_health.gd". */
@@ -254,7 +332,7 @@ export type GameInputEvent =
   | { type: 'blur' }
 
 /** The API the preload script exposes on `window.api`. */
-export interface OpenGenieApi {
+export interface GenieEngineApi {
   platform: string
 
   // App / project lifecycle
@@ -275,6 +353,9 @@ export interface OpenGenieApi {
   locateGodot(): Promise<Result<string | null>>
   /** Fire-and-forget: keeps the main process aware of where the stage is. */
   setGameStageBounds(rect: StageRect): void
+  /** Fire-and-forget: where the AI test run's live monitor box sits, so the
+   *  off-screen game's layer can be composited (scaled down) into it. */
+  setTestMonitorBounds(rect: StageRect): void
   /** Fire-and-forget: input captured over the embedded native game view. */
   sendGameInput(event: GameInputEvent): void
   /**
@@ -289,10 +370,26 @@ export interface OpenGenieApi {
   onGameCursor(cb: (shape: number) => void): () => void
   /** PNG data URL each time the AI captures a screenshot during a test run. */
   onGameTestShot(cb: (dataUrl: string) => void): () => void
+  /** Measured game frame rate, ~1 update/second while a game runs. */
+  onGameFps(cb: (fps: number) => void): () => void
 
   // AI chat (OpenCode)
-  chatSend(message: string, attachments?: ChatAttachment[]): Promise<Result<null>>
+  /** `tier` picks which chat model answers; the conversation continues either way. */
+  chatSend(message: string, attachments?: ChatAttachment[], tier?: ChatModelTier): Promise<Result<null>>
+  /**
+   * Absolute disk path of a picked/dropped File (Electron webUtils) — '' when
+   * it has none (e.g. a File synthesized in the page). Synchronous.
+   */
+  pathForFile(file: File): string
   chatCancel(): Promise<Result<null>>
+  /**
+   * /undo: revert the conversation one user turn (OpenCode restores the files
+   * that turn touched). `revertedTo` is the OpenCode id of the undone user
+   * message — the renderer drops its transcript from the matching turn on.
+   */
+  chatUndo(): Promise<Result<{ revertedTo: string }>>
+  /** /redo: step the revert point forward again (files and conversation). */
+  chatRedo(): Promise<Result<null>>
   /** /clear: fresh conversation AND deletes the project's saved transcript. */
   chatNewSession(): Promise<Result<null>>
   /** Saved transcript + input history for a project; also resumes its AI session. */
@@ -306,15 +403,8 @@ export interface OpenGenieApi {
   /** Dismiss a pending question (the assistant is told and continues without answers). */
   chatRejectQuestion(requestID: string): Promise<Result<null>>
   getSetupStatus(): Promise<Result<SetupStatus>>
-  /** Optional credential fields left blank = leave that provider's setup unchanged. */
-  saveSetup(
-    endpoint: string,
-    model: string,
-    apiKey: string,
-    tencentSecretId?: string,
-    tencentSecretKey?: string,
-    openaiApiKey?: string
-  ): Promise<Result<SetupStatus>>
+  /** Credential fields left blank = leave that provider's setup unchanged. */
+  saveSetup(request: SetupRequest): Promise<Result<SetupStatus>>
   onChatPart(cb: (part: ChatPartUpdate) => void): () => void
   onChatDone(cb: (payload: ChatDonePayload) => void): () => void
   /** A generated 2D/3D asset preview to render in the chat (user can give feedback). */

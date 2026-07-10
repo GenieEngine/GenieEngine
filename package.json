@@ -1,7 +1,7 @@
 {
-  "name": "opengenie",
-  "productName": "OpenGenie",
-  "version": "0.1.0",
+  "name": "genieengine",
+  "productName": "GenieEngine",
+  "version": "0.1.1",
   "description": "AI-powered game engine — build games by chatting with an AI, powered by Godot under the hood.",
   "main": "out/main/index.js",
   "author": "Jared Zhao",
@@ -37,8 +37,8 @@
     "vite": "^6.1.0"
   },
   "build": {
-    "appId": "ai.opengenie.desktop",
-    "productName": "OpenGenie",
+    "appId": "ai.genieengine.desktop",
+    "productName": "GenieEngine",
     "directories": {
       "output": "dist"
     },

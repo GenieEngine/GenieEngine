@@ -1,21 +1,29 @@
 import { dialog, ipcMain } from 'electron'
-import type { ChatAttachment, GameInputEvent, GitChange, InitialState, ProjectInfo, Result, StageRect } from '../shared/types'
+import type { ChatAttachment, ChatModelTier, GameInputEvent, GitChange, InitialState, ProjectInfo, Result, SetupRequest, StageRect } from '../shared/types'
 import { normalizeGodotPath, resolveGodot, resolveOpencode } from './services/binaries'
 import { scanEcs } from './services/ecs'
 import * as files from './services/files'
-import { handleGameInput, openGodotEditor, playGame, setGameLayerVisible, setStageRect, stopGame } from './services/game'
+import { handleGameInput, openGodotEditor, playGame, setGameLayerVisible, setStageRect, setTestMonitorRect, stopGame } from './services/game'
 import * as git from './services/git'
-import { appendInputHistory, clearChatHistory, loadChatState, saveChatHistory } from './services/chat-history'
+import {
+  appendInputHistory,
+  clearChatHistory,
+  loadChatState,
+  saveChatHistory,
+  saveChatHistoryPreservingSession
+} from './services/chat-history'
 import {
   answerQuestion,
   cancelChat,
   getSessionID,
   newChatSession,
   pendingQuestion,
+  redoChat,
   rejectQuestion,
   resumeSession,
   sendChatMessage,
-  shutdownChat
+  shutdownChat,
+  undoChat
 } from './services/opencode'
 import { getSetupStatus, saveSetup } from './services/opencode-setup'
 import { cancelExport, revealExport, runExport } from './services/export'
@@ -110,6 +118,7 @@ export function registerIpcHandlers(): void {
   handle('game:stop', () => stopGame())
   // High-frequency fire-and-forget channels — plain listeners, no Result envelope.
   ipcMain.on('game:stageBounds', (_event, rect: StageRect) => setStageRect(rect))
+  ipcMain.on('game:testMonitorBounds', (_event, rect: StageRect) => setTestMonitorRect(rect))
   ipcMain.on('game:input', (_event, input: GameInputEvent) => handleGameInput(input))
   ipcMain.on('game:layerVisible', (_event, visible: boolean) => setGameLayerVisible(Boolean(visible)))
   handle('game:locateGodot', async (): Promise<string | null> => {
@@ -127,10 +136,14 @@ export function registerIpcHandlers(): void {
   })
 
   // ---- AI chat ---------------------------------------------------------------
-  handle('chat:send', (message: string, attachments?: ChatAttachment[]) =>
-    sendChatMessage(message, requireProject().path, attachments ?? [])
+  // The tier is renderer input — anything but 'large' falls back to 'medium'.
+  handle('chat:send', (message: string, attachments?: ChatAttachment[], tier?: ChatModelTier) =>
+    sendChatMessage(message, requireProject().path, attachments ?? [], tier === 'large' ? 'large' : 'medium')
   )
   handle('chat:cancel', () => cancelChat())
+  // /undo & /redo: OpenCode's native session revert (conversation AND files).
+  handle('chat:undo', () => undoChat(requireProject().path))
+  handle('chat:redo', () => redoChat(requireProject().path))
   // /clear: fresh conversation and the saved transcript is forgotten (the
   // ↑/↓ input history intentionally survives — see chat-history.ts).
   handle('chat:new', async () => {
@@ -153,31 +166,22 @@ export function registerIpcHandlers(): void {
       pendingQuestion: await pendingQuestion()
     }
   })
+  // A save from a no-longer-active project (debounced saves race project
+  // switches) can't vouch for the session id — preserve the file's own rather
+  // than stamping null and severing the transcript from its conversation.
   handle('chat:saveHistory', (projectPath: string, messages: unknown[]) =>
-    saveChatHistory(
-      projectPath,
-      messages,
-      getCurrentProject()?.path === projectPath ? getSessionID() : null
-    )
+    getCurrentProject()?.path === projectPath
+      ? saveChatHistory(projectPath, messages, getSessionID())
+      : saveChatHistoryPreservingSession(projectPath, messages)
   )
   handle('chat:appendInput', (projectPath: string, entry: string) => appendInputHistory(projectPath, entry))
   handle('chat:answerQuestion', (requestID: string, answers: string[][]) => answerQuestion(requestID, answers))
   handle('chat:rejectQuestion', (requestID: string) => rejectQuestion(requestID))
   handle('chat:setupStatus', () => getSetupStatus())
-  handle(
-    'chat:saveSetup',
-    async (
-      endpoint: string,
-      model: string,
-      apiKey: string,
-      tencentSecretId?: string,
-      tencentSecretKey?: string,
-      openaiApiKey?: string
-    ) => {
-      await saveSetup(endpoint, model, apiKey, tencentSecretId, tencentSecretKey, openaiApiKey)
-      return getSetupStatus()
-    }
-  )
+  handle('chat:saveSetup', async (request: SetupRequest) => {
+    await saveSetup(request)
+    return getSetupStatus()
+  })
 
   // ---- Export ----------------------------------------------------------------
   handle('export:run', (name: string, platforms: ExportPlatform[]) =>

@@ -1,5 +1,5 @@
 /* ==========================================================================
-   OpenGenie design system — dark mode only.
+   GenieEngine design system — dark mode only.
    ========================================================================== */
 
 :root {
@@ -694,6 +694,35 @@ button:disabled {
   justify-content: center;
 }
 
+/* Slim strip above the running game (the native layer composites over any
+   DOM inside the stage, so in-stage overlays are impossible). */
+.stage-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-shrink: 0;
+  padding: 3px 10px;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border);
+}
+
+.fps-badge {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  color: var(--green);
+  cursor: default;
+}
+
+.fps-badge.warn {
+  color: var(--orange);
+}
+
+.fps-badge.bad {
+  color: var(--red);
+}
+
 .game-frame-box {
   position: relative;
   display: flex;
@@ -1266,7 +1295,11 @@ button:disabled {
 
 .setup-card {
   width: 100%;
-  max-width: 380px;
+  max-width: 400px;
+  /* The Models tab stacks three endpoint/model/key sections — allow the card
+     to scroll instead of overflowing small windows. */
+  max-height: 100%;
+  overflow-y: auto;
   background: var(--bg-elevated);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius);
@@ -1275,6 +1308,21 @@ button:disabled {
   display: flex;
   flex-direction: column;
   gap: 14px;
+}
+
+.setup-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.setup-section-title {
+  display: block;
+  font-size: 12px;
+  font-weight: 700;
+  margin-bottom: 3px;
 }
 
 .setup-head {
@@ -1311,6 +1359,41 @@ button:disabled {
   display: flex;
   flex-direction: column;
   gap: 5px;
+}
+
+/* Two setup fields side by side (thinking + reasoning effort). */
+.setup-field-row {
+  display: flex;
+  gap: 10px;
+}
+.setup-field-row .setup-field {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Native select dressed like .text-input, with the same chevron as .model-select. */
+.setup-select {
+  appearance: none;
+  width: 100%;
+  background-color: var(--bg-input);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  padding: 7px 24px 7px 10px;
+  font-family: inherit;
+  font-size: 13px;
+  outline: none;
+  cursor: pointer;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5' viewBox='0 0 8 5'%3E%3Cpath d='M1 1l3 3 3-3' fill='none' stroke='%239b9bb0' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 9px center;
+}
+.setup-select:focus {
+  border-color: var(--accent);
+}
+.setup-select option {
+  background: var(--bg-elevated);
+  color: var(--text);
 }
 
 .setup-label {
@@ -1607,6 +1690,10 @@ button:disabled {
 .tool-chip.error .tool-chip-status {
   color: var(--red);
 }
+/* Delegated work: chips relayed from a subagent session (game-tester etc.). */
+.tool-chip.subagent {
+  border-style: dashed;
+}
 
 .tool-chip-icon {
   display: inline-flex;
@@ -1640,6 +1727,38 @@ button:disabled {
   border-radius: var(--radius);
   border: 1px solid var(--border-strong);
   margin-top: 6px;
+}
+
+/* Live test monitor: the main process composites the off-screen game into
+   the screen box as a scaled-down native layer; TestLiveMonitor sizes the
+   screen (in px) to letterbox-fit the game into the monitor area. The card
+   fills the stage and the area absorbs the leftover height, so the layer and
+   the Stop button track every window/sidebar/console resize instead of
+   overflowing onto the console. */
+.game-running-card.live {
+  max-width: min(88%, 860px);
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+.test-monitor-area {
+  /* Basis 0: the area takes exactly the leftover card height, independent of
+     its content — sizing the screen from its rect can never feed back. */
+  flex: 1 1 0;
+  min-height: 0;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+/* Bezel around the screen: its padding keeps the (square-cornered) native
+   layer clear of the rounded corners; black shows through as letterboxing. */
+.test-monitor-shell {
+  padding: 8px;
+  background: #000;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
 }
 
 .thinking-line {
@@ -1772,6 +1891,48 @@ button:disabled {
   align-items: center;
   justify-content: space-between;
   padding: 2px 2px 0;
+}
+
+.inputbar-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.attach-btns {
+  display: flex;
+  gap: 4px;
+}
+
+/* Chat model picker (Medium / Large) in the composer toolbar. */
+.model-select {
+  appearance: none;
+  height: 28px;
+  padding: 0 22px 0 11px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background-color: transparent;
+  /* Chevron — matches --text-dim, inlined since background SVGs can't read currentColor. */
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5' viewBox='0 0 8 5'%3E%3Cpath d='M1 1l3 3 3-3' fill='none' stroke='%239b9bb0' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 9px center;
+  color: var(--text-dim);
+  font-family: var(--font);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.model-select:hover {
+  background-color: var(--bg-hover);
+  color: var(--text);
+}
+.model-select:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+}
+.model-select option {
+  background: var(--bg-elevated);
+  color: var(--text);
 }
 
 .attach-btn {

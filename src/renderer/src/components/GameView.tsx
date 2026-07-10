@@ -90,6 +90,72 @@ function NativeGameOverlay(): React.JSX.Element {
   )
 }
 
+/**
+ * Live monitor for an AI test run. The off-screen game is composited into
+ * the screen box by the main process as a scaled-down native layer (above
+ * the web contents, like normal embedded play) — this element letterbox-fits
+ * the screen into the flexible monitor area and reports where it sits. It
+ * takes no input: the native layer hit-tests nil and no input overlay is
+ * mounted, so the AI's run can't be disturbed by clicks.
+ */
+function TestLiveMonitor({ gameSize }: { gameSize: { width: number; height: number } }): React.JSX.Element {
+  const areaRef = useRef<HTMLDivElement>(null)
+  const screenRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const area = areaRef.current
+    const screen = screenRef.current
+    const shell = screen?.parentElement
+    if (!area || !screen || !shell) return
+    const layout = (): void => {
+      const rect = area.getBoundingClientRect()
+      // Hidden behind another center tab (display:none → 0×0) — skip; a real
+      // rect is re-reported when the tab becomes visible again.
+      if (rect.width < 2 || rect.height < 2) return
+      // The shell's bezel (padding + border) around the screen, whatever the
+      // stylesheet currently says.
+      const chromeX = shell.offsetWidth - screen.offsetWidth
+      const chromeY = shell.offsetHeight - screen.offsetHeight
+      const scale = Math.min((rect.width - chromeX) / gameSize.width, (rect.height - chromeY) / gameSize.height)
+      const width = Math.floor(gameSize.width * scale)
+      const height = Math.floor(gameSize.height * scale)
+      if (width < 8 || height < 8) {
+        // No room (e.g. the console dragged almost to the top) — a 0-rect
+        // tells the main process to park the layer off-screen.
+        screen.style.width = '0px'
+        screen.style.height = '0px'
+        window.api.setTestMonitorBounds({ x: 0, y: 0, width: 0, height: 0 })
+        return
+      }
+      screen.style.width = `${width}px`
+      screen.style.height = `${height}px`
+      // The shell centers in the area, so the screen's final rect is known
+      // now — no need to wait for the style to be laid out.
+      window.api.setTestMonitorBounds({
+        x: rect.x + (rect.width - width) / 2,
+        y: rect.y + (rect.height - height) / 2,
+        width,
+        height
+      })
+    }
+    layout()
+    const observer = new ResizeObserver(layout)
+    observer.observe(area)
+    // The area only RESIZES for height changes; sidebar/window drags can MOVE
+    // it without resizing (the card's width is capped). Every such move comes
+    // from a stage resize, so watching the stage catches them all.
+    const stage = area.closest('.game-stage')
+    if (stage) observer.observe(stage)
+    return () => observer.disconnect()
+  }, [gameSize])
+  return (
+    <div ref={areaRef} className="test-monitor-area">
+      <div className="test-monitor-shell">
+        <div ref={screenRef} className="test-monitor-screen" />
+      </div>
+    </div>
+  )
+}
+
 interface Props {
   state: GameState
   error: string | null
@@ -103,7 +169,7 @@ interface Props {
 }
 
 const MAX_LOG_LINES = 500
-const CONSOLE_HEIGHT_KEY = 'opengenie:consoleHeight'
+const CONSOLE_HEIGHT_KEY = 'genieengine:consoleHeight'
 const CONSOLE_MIN = 80
 const CONSOLE_MAX = 600
 
@@ -160,6 +226,13 @@ export function GameView({
   useEffect(() => window.api.onGameTestShot(setTestShot), [])
   useEffect(() => {
     if (state.status !== 'running' || state.mode !== 'test') setTestShot(null)
+  }, [state])
+
+  // Frame rate measured inside the game process (~1 update/s while running).
+  const [fps, setFps] = useState<number | null>(null)
+  useEffect(() => window.api.onGameFps(setFps), [])
+  useEffect(() => {
+    if (state.status !== 'running') setFps(null)
   }, [state])
 
   // Keep the main process aware of where the game should render. With an
@@ -226,16 +299,23 @@ export function GameView({
       )
     }
     if (state.status === 'running' && state.mode === 'test') {
+      const live = state.liveView === true && state.testGameSize !== undefined
       return (
-        <div className="game-running-card">
+        <div className={live ? 'game-running-card live' : 'game-running-card'}>
           <span className="status-dot starting big" />
           <h2>AI test run in progress</h2>
           <p className="muted">
-            {testShot
-              ? 'Latest screenshot the assistant captured:'
-              : 'The assistant is running your game off-screen — playing it, taking screenshots and checking its state.'}
+            {live
+              ? 'Watch live as the assistant plays your game and checks its state.'
+              : testShot
+                ? 'Latest screenshot the assistant captured:'
+                : 'The assistant is running your game off-screen — playing it, taking screenshots and checking its state.'}
           </p>
-          {testShot && <img className="test-monitor" src={testShot} alt="Latest AI test screenshot" />}
+          {live ? (
+            <TestLiveMonitor gameSize={state.testGameSize!} />
+          ) : (
+            testShot && <img className="test-monitor" src={testShot} alt="Latest AI test screenshot" />
+          )}
           <button className="btn btn-stop" onClick={onStop}>
             <StopIcon size={12} /> Stop
           </button>
@@ -259,12 +339,12 @@ export function GameView({
         </button>
         <h2>Press Run to start your game</h2>
         <p className="muted">
-          Your game runs right here in OpenGenie. Ask the assistant in the chat to build or change
+          Your game runs right here in GenieEngine. Ask the assistant in the chat to build or change
           anything.
         </p>
         {!godotPath && (
           <button className="warning-chip" onClick={onLocateGodot}>
-            Bundled Godot engine missing — reinstall OpenGenie, or click to locate one
+            Bundled Godot engine missing — reinstall GenieEngine, or click to locate one
           </button>
         )}
       </div>
@@ -273,8 +353,23 @@ export function GameView({
 
   const embedded = state.status === 'running'
 
+  // The FPS readout lives in a strip ABOVE the stage: the native game layer
+  // is composited over the web contents, so DOM drawn inside the stage rect
+  // would be invisible behind the running game.
+  const showFpsBar = embedded && state.mode === 'native'
+
   return (
     <section className="game-area" ref={areaRef}>
+      {showFpsBar && (
+        <div className="stage-toolbar">
+          <span
+            className={`fps-badge${fps !== null && fps < 30 ? ' bad' : fps !== null && fps < 50 ? ' warn' : ''}`}
+            title="Frame rate measured in the game process. Per-minute stats (min/max/avg/1% low/0.1% low) are logged to .genieengine/perf.log"
+          >
+            {fps !== null ? `${Math.round(fps)} FPS` : '— FPS'}
+          </span>
+        </div>
+      )}
       <div ref={stageRef} className={embedded ? 'game-stage embedded' : 'game-stage'}>
         {error && (
           <div className="error-banner">

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Downloads the engines OpenGenie ships with — Godot and the OpenCode CLI —
+ * Downloads the engines GenieEngine ships with — Godot and the OpenCode CLI —
  * into vendor/ for a target platform. Defaults to the *current* platform and
  * runs automatically on `npm install` (postinstall); idempotent. electron-builder
  * copies vendor/<platform> into that platform's packaged app resources, so
@@ -139,5 +139,5 @@ try {
   // Don't fail `npm install` when offline — the app degrades gracefully and
   // `npm run setup` can be re-run later.
   console.warn(`\n⚠ vendor fetch failed: ${err.message}`)
-  console.warn('  OpenGenie needs these bundled engines; re-run with: npm run setup\n')
+  console.warn('  GenieEngine needs these bundled engines; re-run with: npm run setup\n')
 }

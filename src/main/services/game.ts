@@ -12,11 +12,12 @@ import {
   encodeMouseButtonEvent,
   encodeMouseMotionEvent
 } from './godot-input-codec'
+import { addPerfFrames, appendPerfLog, drainPerfWindow, formatPerfStats, resetPerfWindow, type PerfStats } from './perf-monitor'
 import { cleanupTestAgent, injectTestAgent } from './test-agent'
 
 /**
  * Runs the user's game with the full desktop engine, rendered *inside* the
- * OpenGenie window. Uses Godot 4.6+'s embedded display server (the same
+ * GenieEngine window. Uses Godot 4.6+'s embedded display server (the same
  * mechanism the Godot editor uses for its in-editor game view on macOS): the
  * game process renders into a cross-process CoreAnimation context, which we
  * composite via the layerhost native addon; display state and input travel
@@ -30,15 +31,76 @@ let nativeProcess: ChildProcess | null = null
 // Native embedded-session state
 let embedSession: EmbedSession | null = null
 let layerAttached = false
+// Renderer's last requested layer visibility — remembered so a layer that
+// attaches while something covers the stage (modal, ECS tab) starts hidden.
+let layerVisibleWanted = true
 let stageRect: StageRect | null = null
 
+// Live monitor for AI test runs: the off-screen game renders into a CAContext
+// either way, so the layer host can mirror it — scaled down — into the small
+// monitor box the test card shows. The renderer reports that box's rect; the
+// context id waits here until it does (the card only renders once the state
+// flips to running, i.e. after the id arrived).
+let testMonitorRect: StageRect | null = null
+let testContextId: number | null = null
+let testGameSize: { width: number; height: number } | null = null
+
+// The project that currently has the agent (test-agent.ts) injected — set for
+// every embedded run (play and test), cleaned up on stop. Also where perf.log goes.
+let injectedProjectPath: string | null = null
+
 // AI test-run state
-let testProjectPath: string | null = null
 let testCommandCounter = 0
 const pendingTestReplies = new Map<
   number,
   { resolve: (r: { ok: boolean; text: string }) => void; timer: ReturnType<typeof setTimeout> }
 >()
+
+/**
+ * Budget for one AI test run. Without a cap, open-ended test briefs ran
+ * 50-70 agent-loop steps (12+ minutes): the model kept probing instead of
+ * concluding, every step re-sent the whole screenshot-laden conversation,
+ * and the provider started failing (413/500) — the user saw a frozen chat
+ * and cancelled. Healthy focused runs finish in well under 20 tool calls,
+ * so the cap only trips runaway sessions. Enforced in the harness
+ * (test-harness.ts) because a prompt-only budget is routinely ignored.
+ * Starting a new run_game_test resets the budget — deliberate: a fresh run
+ * restarts the game, so it can't be farmed to extend one endless session.
+ */
+const TEST_BUDGET = { calls: 40, ms: 8 * 60_000, warnCalls: 30, warnMs: 6 * 60_000 }
+let testToolCalls = 0
+let testRunStart = 0
+
+/**
+ * Count one game tool call against the current test run's budget and report
+ * where it stands. `notice` (when set) must reach the model: it is either the
+ * wrap-up warning appended to a successful result or the exhausted message
+ * that replaces the tool result entirely.
+ */
+export function consumeTestBudget(): { exhausted: boolean; notice?: string } {
+  if (state.mode !== 'test' || state.status !== 'running') return { exhausted: false }
+  testToolCalls++
+  const elapsedMs = Date.now() - testRunStart
+  const minutes = Math.round(elapsedMs / 60_000)
+  if (testToolCalls > TEST_BUDGET.calls || elapsedMs > TEST_BUDGET.ms) {
+    return {
+      exhausted: true,
+      notice:
+        `Test budget exhausted (${TEST_BUDGET.calls} game tool calls / ${TEST_BUDGET.ms / 60_000} minutes per run) — ` +
+        'stop probing now. Call stop_game_test, then write your report from the evidence you already have. ' +
+        'game_logs still works if you need the final console output.'
+    }
+  }
+  if (testToolCalls > TEST_BUDGET.warnCalls || elapsedMs > TEST_BUDGET.warnMs) {
+    return {
+      exhausted: false,
+      notice:
+        `[test budget: ${testToolCalls}/${TEST_BUDGET.calls} tool calls, ~${minutes}/${TEST_BUDGET.ms / 60_000} minutes] ` +
+        'Wrap up: verify anything essential with the fewest remaining probes, then stop_game_test and report.'
+    }
+  }
+  return { exhausted: false }
+}
 
 function setState(next: GameState): void {
   state = next
@@ -83,9 +145,28 @@ function pipeLines(stream: NodeJS.ReadableStream | null): void {
   stream.on('end', () => emitLog(buffer))
 }
 
+/**
+ * Record a completed 60s frame-rate window: into the game console/log buffer
+ * (so the AI's game_logs tool sees it) and the project's .genieengine/perf.log
+ * (persistent history for diagnosing performance across runs).
+ */
+function logPerfStats(stats: PerfStats): void {
+  emitLog(`[genieengine] fps ${formatPerfStats(stats)} — history in .genieengine/perf.log`)
+  if (injectedProjectPath) {
+    void appendPerfLog(injectedProjectPath, state.mode ?? 'native', stats)
+  }
+}
+
+/** Frame-delta batch (~1/s) from the injected agent — see perf-monitor.ts. */
+function handlePerfFrames(deltas: number[]): void {
+  const { fps, completed } = addPerfFrames(deltas)
+  if (fps !== null) sendToRenderer('game:fps', fps)
+  if (completed) logPerfStats(completed)
+}
+
 function godotMissingError(): Error {
   return new Error(
-    'The bundled Godot engine is missing. Reinstall OpenGenie (or run `npm run setup` in development), or locate a Godot binary manually.'
+    'The bundled Godot engine is missing. Reinstall GenieEngine (or run `npm run setup` in development), or locate a Godot binary manually.'
   )
 }
 
@@ -96,6 +177,8 @@ function godotMissingError(): Error {
 interface LayerHostAddon {
   attach(handle: Buffer, contextId: number, x: number, y: number, w: number, h: number): boolean
   setFrame(x: number, y: number, w: number, h: number): void
+  /** Scale the hosted game tree (1 = native size; <1 shrinks into the frame). */
+  setScale(scale: number): void
   setVisible(visible: boolean): void
   detach(): void
 }
@@ -115,7 +198,7 @@ function layerhost(): LayerHostAddon | null {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     layerHostAddon = require(path) as LayerHostAddon
   } catch (err) {
-    console.error('[opengenie] failed to load layerhost addon:', err)
+    console.error('[genieengine] failed to load layerhost addon:', err)
     layerHostAddon = null
   }
   return layerHostAddon
@@ -135,18 +218,67 @@ function sendStageSizeToGame(session: EmbedSession, rect: StageRect): void {
 /** Renderer reports where the stage sits inside the window (CSS px = points). */
 export function setStageRect(rect: StageRect): void {
   stageRect = rect
-  if (layerAttached && embedSession) {
+  // Test mode: the layer mirrors the game into the monitor box, not the
+  // stage, and the off-screen game keeps its launch size (a mid-test resize
+  // would disrupt the AI's run).
+  if (layerAttached && embedSession && state.mode !== 'test') {
     layerhost()?.setFrame(rect.x, rect.y, rect.width, rect.height)
     sendStageSizeToGame(embedSession, rect)
+  }
+}
+
+/** Renderer reports where the test card's live monitor box sits. */
+export function setTestMonitorRect(rect: StageRect): void {
+  testMonitorRect = rect
+  updateTestMonitorLayer()
+}
+
+/**
+ * Attach or reposition the live-monitor layer for an AI test run: the full
+ * game tree, letterbox-fitted into the reported box by scaling the layer, so
+ * the user can watch the AI play. Purely visual — the box's DOM (hitTest nil)
+ * takes no input, and the game's render size is untouched.
+ */
+function updateTestMonitorLayer(): void {
+  const addon = layerhost()
+  const win = getMainWindow()
+  if (!addon || !win || state.mode !== 'test' || testContextId === null || !testMonitorRect || !testGameSize) return
+  if (testMonitorRect.width < 8 || testMonitorRect.height < 8) {
+    // The renderer reports a 0-rect when the layout has no room for the
+    // monitor — park the attached layer off-screen rather than leaving it at
+    // a stale position over other UI (DOM can't cover a native layer).
+    if (layerAttached) addon.setFrame(-100000, -100000, 1, 1)
+    return
+  }
+  const scale = Math.min(testMonitorRect.width / testGameSize.width, testMonitorRect.height / testGameSize.height)
+  const width = testGameSize.width * scale
+  const height = testGameSize.height * scale
+  const x = testMonitorRect.x + (testMonitorRect.width - width) / 2
+  const y = testMonitorRect.y + (testMonitorRect.height - height) / 2
+  try {
+    if (!layerAttached) {
+      addon.attach(win.getNativeWindowHandle(), testContextId, x, y, width, height)
+      layerAttached = true
+      if (!layerVisibleWanted) addon.setVisible(false)
+    } else {
+      addon.setFrame(x, y, width, height)
+    }
+    addon.setScale(scale)
+  } catch (err) {
+    // The run works without the live view — don't let a compositing failure
+    // take down the test session.
+    emitLog(`[genieengine] live test monitor unavailable: ${err instanceof Error ? err.message : String(err)}`)
   }
 }
 
 /**
  * Hide/show the embedded game layer. The OS composites it above the web
  * contents, so the renderer can't cover it with DOM — it asks us to hide it
- * while another center tab (e.g. the ECS viewer) occupies the stage.
+ * while another center tab (e.g. the ECS viewer) or a modal overlay
+ * (settings, export) occupies the stage.
  */
 export function setGameLayerVisible(visible: boolean): void {
+  layerVisibleWanted = visible
   if (layerAttached) layerhost()?.setVisible(visible)
 }
 
@@ -249,11 +381,19 @@ async function playNativeEmbedded(godot: string, projectPath: string, visible: b
       if (visible) {
         addon!.attach(win.getNativeWindowHandle(), contextId, rect.x, rect.y, rect.width, rect.height)
         layerAttached = true
-        emitLog('[opengenie] game embedded in the OpenGenie window (native, full performance)')
+        // attach() shows the layer; honor the renderer's requested visibility
+        // in case a modal opened before the game finished launching.
+        if (!layerVisibleWanted) addon!.setVisible(false)
+        emitLog('[genieengine] game embedded in the GenieEngine window (native, full performance)')
         setState({ status: 'running', mode: 'native' })
       } else {
-        emitLog('[opengenie] game running off-screen for an AI test run')
-        setState({ status: 'running', mode: 'test' })
+        emitLog('[genieengine] game running off-screen for an AI test run')
+        testContextId = contextId
+        testGameSize = { width: rect.width, height: rect.height }
+        // The monitor box may already be on screen (e.g. a second test run in
+        // a row) — mirror into it right away instead of waiting for a report.
+        updateTestMonitorLayer()
+        setState({ status: 'running', mode: 'test', liveView: addon !== null, testGameSize })
       }
       // Give the game keyboard focus semantics right away.
       session.sendNotification(NOTIFICATION.APPLICATION_FOCUS_IN)
@@ -271,9 +411,11 @@ async function playNativeEmbedded(godot: string, projectPath: string, visible: b
         pendingTestReplies.delete(id)
         pending.resolve({ ok, text })
       }
-    }
+    },
+    onPerfFrames: handlePerfFrames
   })
 
+  resetPerfWindow()
   const port = await session.listen()
   embedSession = session
 
@@ -294,7 +436,7 @@ async function playNativeEmbedded(godot: string, projectPath: string, visible: b
   pipeLines(proc.stdout)
   pipeLines(proc.stderr)
   proc.once('exit', (code, signal) => {
-    emitLog(`[opengenie] game exited (${signal ?? `code ${code ?? 0}`})`)
+    emitLog(`[genieengine] game exited (${signal ?? `code ${code ?? 0}`})`)
     // Only tear down if this process is still the active run. After a Stop,
     // the old process exits up to 1.5s later (grace period before kill); by
     // then a new run may own nativeProcess/embedSession, and tearing down
@@ -316,6 +458,12 @@ export async function playGame(projectPath: string): Promise<void> {
 
   setState({ status: 'starting' })
   try {
+    // The agent also runs during user play — it supplies the frame timings
+    // behind the FPS counter and .genieengine/perf.log (probe commands stay
+    // test-only: runTestCommand refuses outside test mode).
+    await cleanupTestAgent(projectPath) // stale files from a crashed run
+    await injectTestAgent(projectPath)
+    injectedProjectPath = projectPath
     await playNativeEmbedded(godot, projectPath, true)
   } catch (err) {
     stopGame()
@@ -324,6 +472,10 @@ export async function playGame(projectPath: string): Promise<void> {
 }
 
 export function stopGame(): void {
+  // Flush the in-progress stats window first (needs mode + project path, both
+  // still set here); short leftovers are dropped inside drainPerfWindow.
+  const finalStats = drainPerfWindow()
+  if (finalStats) logPerfStats(finalStats)
   if (nativeProcess) {
     // Ask the game to close cleanly (saves etc.); force-kill if it lingers.
     const proc = nativeProcess
@@ -335,6 +487,8 @@ export function stopGame(): void {
     layerhost()?.detach()
     layerAttached = false
   }
+  testContextId = null
+  testGameSize = null
   embedSession?.close()
   embedSession = null
   wheelAccumX = 0
@@ -344,9 +498,9 @@ export function stopGame(): void {
     pending.resolve({ ok: false, text: 'game stopped' })
   }
   pendingTestReplies.clear()
-  if (testProjectPath) {
-    void cleanupTestAgent(testProjectPath)
-    testProjectPath = null
+  if (injectedProjectPath) {
+    void cleanupTestAgent(injectedProjectPath)
+    injectedProjectPath = null
   }
   if (state.status !== 'stopped') setState({ status: 'stopped' })
 }
@@ -364,11 +518,13 @@ export async function startGameTest(projectPath: string): Promise<void> {
   if (!godot) throw godotMissingError()
 
   logBuffer.length = 0
+  testToolCalls = 0
+  testRunStart = Date.now()
   setState({ status: 'starting', mode: 'test' })
   try {
     await cleanupTestAgent(projectPath) // stale files from a crashed run
     await injectTestAgent(projectPath)
-    testProjectPath = projectPath
+    injectedProjectPath = projectPath
     await playNativeEmbedded(godot, projectPath, false)
     // Wait until the handshake completes (state flips to running) so tools
     // called right after run_game_test find a live session. Read via the
@@ -470,6 +626,6 @@ export async function runTestInput(actions: TestInputAction[]): Promise<void> {
 export async function openGodotEditor(projectPath: string): Promise<void> {
   const godot = await resolveGodot()
   if (!godot) throw godotMissingError()
-  // Detached so the editor outlives OpenGenie if the user quits.
+  // Detached so the editor outlives GenieEngine if the user quits.
   spawn(godot, ['--editor', '--path', projectPath], { detached: true, stdio: 'ignore' }).unref()
 }

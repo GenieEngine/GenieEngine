@@ -76,7 +76,7 @@ export function normalizeGodotPath(path: string): string {
 }
 
 /**
- * OpenGenie ships with its own engines (fetched by scripts/fetch-vendor.mjs).
+ * GenieEngine ships with its own engines (fetched by scripts/fetch-vendor.mjs).
  * In development they live in <repo>/vendor; in packaged builds
  * electron-builder copies them into the app's resources directory.
  */
@@ -101,7 +101,7 @@ export function bundledOpencodePath(): string {
 }
 
 // Resolution order: explicit user override → bundled engine → system installs.
-// The bundled engine outranks system copies so every OpenGenie install runs
+// The bundled engine outranks system copies so every GenieEngine install runs
 // the exact Godot version the app was tested with.
 export async function resolveGodot(): Promise<string | null> {
   const settings = getSettings()

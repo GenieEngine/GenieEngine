@@ -50,7 +50,7 @@ const PLATFORMS: PlatformSpec[] = [
     presetName: 'macOS',
     platform: 'macOS',
     outFile: (n) => `${n}.zip`,
-    extraOptions: (slug) => `application/bundle_identifier="ai.opengenie.${slug}"\n`
+    extraOptions: (slug) => `application/bundle_identifier="ai.genieengine.${slug}"\n`
   },
   {
     id: 'linux',
@@ -78,7 +78,7 @@ const PLATFORMS: PlatformSpec[] = [
     presetName: 'iOS',
     platform: 'iOS',
     outFile: (n) => `${n}.ipa`,
-    extraOptions: (slug) => `application/bundle_identifier="ai.opengenie.${slug}"\n`
+    extraOptions: (slug) => `application/bundle_identifier="ai.genieengine.${slug}"\n`
   }
 ]
 
@@ -185,6 +185,31 @@ async function ensureEtc2Astc(projectPath: string): Promise<void> {
   await writeFile(file, src)
 }
 
+/**
+ * Exported games must never boot on the Godot-logo splash — they should look
+ * like the creator's game, not the engine's demo. New projects get these
+ * settings from the template (see templates.ts); this covers projects created
+ * before that and imported ones. Same semantics as ensureEtc2Astc: a project
+ * that already made a splash choice (its own image, or show_image set either
+ * way) is deliberate and is left alone.
+ */
+async function ensureNoBootSplash(projectPath: string): Promise<void> {
+  const file = join(projectPath, 'project.godot')
+  let src = await readFile(file, 'utf8')
+  if (src.includes('boot_splash/image') || src.includes('boot_splash/show_image')) return
+  // Boot to plain black (the standard "professional" launch look) instead of
+  // Godot's default gray splash background.
+  const lines = ['boot_splash/show_image=false']
+  if (!src.includes('boot_splash/bg_color')) lines.unshift('boot_splash/bg_color=Color(0, 0, 0, 1)')
+  const settings = lines.join('\n')
+  if (/^\[application\]$/m.test(src)) {
+    src = src.replace(/^\[application\]$/m, `[application]\n\n${settings}`)
+  } else {
+    src += `\n[application]\n\n${settings}\n`
+  }
+  await writeFile(file, src)
+}
+
 /** A freshly generated preset block; the index is assigned by ensurePresets. */
 function presetBlock(spec: PlatformSpec, slug: string): string {
   // The options section must not be empty — Godot's config parser rejects a
@@ -246,7 +271,7 @@ function mergePresets(existing: string, specs: PlatformSpec[], slug: string): st
   if (existing !== '' && missing.length === 0) return null
 
   const blocks = [...kept.map((p) => p.body), ...missing.map((s) => presetBlock(s, slug))]
-  let out = '; Export presets — OpenGenie appends missing presets here; existing ones (including\n; presets configured in the Godot editor) are preserved as-is.\n'
+  let out = '; Export presets — GenieEngine appends missing presets here; existing ones (including\n; presets configured in the Godot editor) are preserved as-is.\n'
   blocks.forEach((body, i) => {
     const renumbered = body.replace(/^\[preset\.\d+(\.options)?\]/gm, (_m, opt: string | undefined) => `[preset.${i}${opt ?? ''}]`)
     out += '\n' + renumbered.trimEnd() + '\n'
@@ -282,6 +307,7 @@ export async function runExport(projectPath: string, baseName: string, platformI
     await ensureTemplates()
 
     await ensureEtc2Astc(projectPath)
+    await ensureNoBootSplash(projectPath)
     await ensurePresets(projectPath, specs, slug)
 
     for (const spec of specs) {

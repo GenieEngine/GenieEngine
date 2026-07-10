@@ -4,13 +4,13 @@ import { registerIpcHandlers } from './ipc'
 import { loadShellPath } from './services/binaries'
 import { stopGame } from './services/game'
 import { shutdownChat } from './services/opencode'
-import { ensureOpencodeMcpConfig } from './services/opencode-config'
+import { ensureOpencodeConfig } from './services/opencode-config'
 import { startTestHarness, stopTestHarness } from './services/test-harness'
 import { loadSettings } from './state'
 import { sendToRenderer, setMainWindow } from './window'
 
 // Keeps the userData (settings) folder stable between dev and packaged runs.
-app.setName('OpenGenie')
+app.setName('GenieEngine')
 
 function createWindow(): void {
   const win = new BrowserWindow({
@@ -20,12 +20,12 @@ function createWindow(): void {
     minHeight: 640,
     show: false,
     backgroundColor: '#0e0e13',
-    title: 'OpenGenie',
+    title: 'GenieEngine',
     // Frameless-style titlebar on macOS for a modern, engine-like look.
     ...(process.platform === 'darwin' ? { titleBarStyle: 'hiddenInset' as const } : {}),
     webPreferences: {
       // Renderer stays sandboxed (the Electron default): the preload only
-      // uses contextBridge/ipcRenderer, which sandboxed preloads support.
+      // uses contextBridge/ipcRenderer/webUtils, which sandboxed preloads support.
       preload: join(__dirname, '../preload/index.js')
     }
   })
@@ -75,7 +75,7 @@ app.whenReady().then(async () => {
   await loadShellPath()
   loadSettings()
   // Before any chat server starts: OpenCode reads its config at boot.
-  await ensureOpencodeMcpConfig()
+  await ensureOpencodeConfig()
   startTestHarness()
   registerIpcHandlers()
   createWindow()
