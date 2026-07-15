@@ -167,6 +167,36 @@ const TOOLS = [
     name: 'stop_game_test',
     description: 'Stop the off-screen test game.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false }
+  },
+  {
+    name: 'itch_search',
+    description:
+      "Search itch.io's catalog of FREE game assets (sprites, tilesets, 3D models, audio, fonts) — no account needed. " +
+      'Returns a numbered markdown list of asset pages with clickable links. Present that list to the user VERBATIM as numbered options, ' +
+      "remind them to check each asset's license/attribution rules on its itch.io page, and ask them to pick before downloading. " +
+      'Rate-limited: make ONE well-chosen search (e.g. "pixel art dungeon tileset"), not many variations.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Search terms, e.g. "pixel art dungeon tileset" or "low poly nature pack".' }
+      },
+      required: ['query']
+    }
+  },
+  {
+    name: 'itch_download',
+    description:
+      "Download a FREE asset from its itch.io page (URL shaped https://<author>.itch.io/<name>) into the project's .genieengine/itch/ " +
+      'staging folder — zip archives are auto-extracted — and return the file listing. Only free assets work (no purchases, no account). ' +
+      'Staged files are INVISIBLE to Godot and git: afterwards copy just the pieces the user wants into the proper assets/ sub-folders ' +
+      'with your file tools and wire them into scenes. Only call this after the user has picked an asset.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        url: { type: 'string', description: "The asset's itch.io page URL, e.g. https://pixelfrog-assets.itch.io/kings-and-pigs." }
+      },
+      required: ['url']
+    }
   }
 ]
 

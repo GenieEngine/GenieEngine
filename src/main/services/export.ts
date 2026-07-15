@@ -24,7 +24,7 @@ const pexec = promisify(execFile)
  * and iOS needs Xcode — those surface Godot's own error messages.
  */
 
-const GODOT_VERSION = '4.7'
+const GODOT_VERSION = '4.7.1'
 const TEMPLATES_URL = `https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_export_templates.tpz`
 
 interface PlatformSpec {

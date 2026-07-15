@@ -108,6 +108,33 @@ files (3D models, audio, fonts). Each is copied into the project under
 - Copy selectively: just the files the game needs, renamed to fit the project, not the
   whole pack.
 
+## Free asset packs from itch.io (`itch_search` / `itch_download`)
+
+Two always-available tools (server `genieengine`) fetch FREE asset packs from itch.io —
+no account or key needed. The USER picks; you search and fetch:
+
+1. When the user wants ready-made art/audio/fonts (or asks to browse asset packs), call
+   `itch_search` with one specific query ("pixel art dungeon tileset", "low poly nature
+   pack"). Searches are rate-limited — one good query, not several variations.
+2. Relay the returned numbered list to the user VERBATIM — keep the numbering and the
+   markdown links intact (they are clickable in the chat) — and ask them to pick an
+   option. Always include the license disclaimer: every itch.io asset carries its own
+   license, and the user should check the asset's page for usage and attribution rules
+   before shipping their game with it.
+3. Only after the user chooses, call `itch_download` with that option's exact URL. Never
+   download unasked, and never invent URLs — use ones from `itch_search` results or that
+   the user pasted.
+4. The download lands in `.genieengine/itch/<name>/` and follows the SAME rules as
+   user-uploaded packs above: review the returned file listing (image-reader on previews
+   if you cannot view images), copy ONLY the files the game needs into the proper
+   `assets/` sub-folders, renamed to fit the project, and wire them into scenes. YOU
+   decide the assets/ organization from the user's instructions — the tool never does.
+5. If search reports itch.io is rate-limiting, bot-checking, or that the proxy blocked
+   the request, tell the user plainly and try again later — never hammer retries. The
+   user can always browse itch.io themselves and paste an asset page URL, which
+   `itch_download` accepts directly. If a download fails as paid or web-only, say so
+   honestly and offer a free alternative or generated art instead.
+
 ## Architecture — Entity Component System (required)
 
 Structure ALL game code as ECS, mapped onto Godot like this:

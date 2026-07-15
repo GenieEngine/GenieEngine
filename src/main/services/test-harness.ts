@@ -19,6 +19,7 @@ import {
 } from './game'
 import { generateImageAsset, isGptImageConfigured } from './gptimage'
 import { generateAsset, isHy3dConfigured, type GenerateAssetRequest } from './hy3d'
+import { downloadItchAsset, searchItchAssets } from './itch'
 import type { AssetPreview } from '../../shared/types'
 
 /**
@@ -236,6 +237,20 @@ async function dispatchTool(name: string, args: Record<string, unknown>): Promis
         imageBase64: result.previewBase64,
         imageMime: result.previewMime
       }
+    }
+    case 'itch_search': {
+      const query = String(args.query ?? '').trim()
+      if (!query) return { ok: false, text: 'Provide a "query" to search itch.io for.' }
+      return { ok: true, text: await searchItchAssets(query) }
+    }
+    case 'itch_download': {
+      const project = getCurrentProject()
+      if (!project) return { ok: false, text: 'No project is open in GenieEngine.' }
+      const text = await downloadItchAsset(project.path, String(args.url ?? ''))
+      // Staged under .genieengine/ (hidden from the sidebar today), but keep
+      // the post-write convention the other file-writing tools follow.
+      sendToRenderer('chat:files-changed')
+      return { ok: true, text }
     }
     default:
       return { ok: false, text: `Unknown tool: ${name}` }

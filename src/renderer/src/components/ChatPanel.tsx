@@ -193,9 +193,12 @@ function slashQueryOf(input: string): string | null {
 }
 
 function toolIcon(name: string): React.JSX.Element {
-  if (name === 'bash') return <TerminalIcon size={11} />
-  if (name === 'glob' || name === 'grep' || name === 'list' || name === 'webfetch') return <SearchIcon size={11} />
-  if (name === 'read' || name === 'write' || name === 'edit' || name === 'patch') return <FileIcon size={11} />
+  const base = name.replace(/^genieengine_/, '')
+  if (base === 'bash') return <TerminalIcon size={11} />
+  if (base === 'glob' || base === 'grep' || base === 'list' || base === 'webfetch' || base === 'itch_search')
+    return <SearchIcon size={11} />
+  if (base === 'read' || base === 'write' || base === 'edit' || base === 'patch') return <FileIcon size={11} />
+  if (base === 'itch_download') return <FolderIcon size={11} />
   return <SparkIcon size={11} />
 }
 

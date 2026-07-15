@@ -26,7 +26,7 @@ import { fileURLToPath } from 'node:url'
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const VENDOR = join(ROOT, 'vendor')
 
-const GODOT_VERSION = '4.7'
+const GODOT_VERSION = '4.7.1'
 const OPENCODE_VERSION = 'v1.17.13'
 
 function argValue(flag) {
