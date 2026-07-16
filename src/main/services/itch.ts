@@ -1,3 +1,4 @@
+import { net } from 'electron'
 import { mkdir, open, readdir, rm, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { downloadGame, type DownloadGameResponse } from 'itchio-downloader'
@@ -8,10 +9,11 @@ import { extractZip } from './export'
 /**
  * itch.io free-asset tools, exposed to the AI as `itch_search` and
  * `itch_download` (test-harness.ts / mcp-bridge.mjs). Neither needs an
- * itch.io account or API key: search goes through r.jina.ai's markdown
- * rendering of itch.io's free-game-assets search page, and downloads use
- * itchio-downloader's direct-HTTP path (its puppeteer fallback is an optional
- * dependency we deliberately never install — see .puppeteerrc.cjs).
+ * itch.io account or API key: search fetches itch.io's anonymous browse
+ * pages directly (the /search route itself is login-walled — see the Search
+ * section), and downloads use itchio-downloader's direct-HTTP path (its
+ * puppeteer fallback is an optional dependency we deliberately never
+ * install — see .puppeteerrc.cjs).
  *
  * Downloads land in `.genieengine/itch/<author>-<name>/` — a STAGING area
  * (gitignored and .gdignore'd like all of .genieengine/). The agent then
@@ -23,15 +25,33 @@ import { extractZip } from './export'
 // Search
 // ---------------------------------------------------------------------------
 
-// r.jina.ai allows ~20 requests/minute per IP without a key; space calls to
-// stay safely under it and serialize them so concurrent tool calls can't race
-// the limiter.
-const SEARCH_MIN_INTERVAL_MS = 3500
-const SEARCH_TIMEOUT_MS = 45_000
+// itch.io's /search route 302s to /login for anonymous visitors, and its
+// browse routes answer HTTP 403 as soon as two facets are stacked in the path
+// (both verified live, cookies/referer make no difference) — anonymous
+// visitors get exactly one facet. So search works like this:
+//
+//   1. The query is mapped onto itch.io's own tag/genre vocabulary (from
+//      /tags.json, fetched once a day per app run) and the single most
+//      specific facet becomes the URL filter.
+//   2. https://itch.io/game-assets/free/<facet> is fetched and its game cells
+//      parsed — popularity-sorted, with title, author, and a short
+//      description per result.
+//   3. The query's remaining words (e.g. "fox") rank the parsed results by
+//      title/description relevance.
+//
+// itch.io also 429s request bursts aggressively (observed live: 3 requests
+// within ~12s → 429, fine again after ~45s), so calls are serialized and
+// spaced well apart; a search costs 1–2 requests here (+1 for the tag
+// vocabulary on the first search of the day).
+const SEARCH_MIN_INTERVAL_MS = 20_000
+const SEARCH_TIMEOUT_MS = 30_000
 const MAX_RESULTS = 10
-// When no structured results parse, hand the model this much raw markdown so
-// it can extract asset links itself instead of failing outright.
-const RAW_FALLBACK_CHARS = 4000
+const TAG_VOCAB_TTL_MS = 24 * 60 * 60 * 1000
+const BROWSE_BASE = 'https://itch.io/game-assets/free'
+// Everywhere-words that would skew relevance ranking on an assets listing.
+const RANKING_STOPWORDS = new Set(
+  'a an the and or of for with in on to art pack packs asset assets game games free'.split(' ')
+)
 
 let nextSearchAt = 0
 let searchChain: Promise<unknown> = Promise.resolve()
@@ -48,54 +68,170 @@ function throttledSearch<T>(fn: () => Promise<T>): Promise<T> {
   return run
 }
 
-export async function searchItchAssets(query: string): Promise<string> {
-  const q = query.trim()
-  if (!q) throw new Error('Provide a non-empty search query.')
-  // c.2 = the "game assets" category, m.free = free only.
-  const target = `https://itch.io/search?facets=c.2%2Cm.free&q=${encodeURIComponent(q)}`
-  const markdown = await throttledSearch(async () => {
-    const res = await fetch(`https://r.jina.ai/${target}`, {
-      signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS),
-      headers: { accept: 'text/plain' }
-    })
-    if (res.status === 401 || res.status === 403) {
-      // Seen live: the proxy's anonymous tier blocks whole networks by
-      // reputation ("bad network reputation (AS...)"), so waiting won't help.
-      throw new Error(
-        `The search proxy is refusing anonymous requests from this network (HTTP ${res.status}), so searching is ` +
-          'unavailable right now. Suggest the user browse https://itch.io/game-assets/free in their browser and ' +
-          'paste the page URL of an asset they like — itch_download works with any itch.io asset page URL.'
-      )
-    }
-    if (!res.ok) {
-      throw new Error(`itch.io search proxy failed (HTTP ${res.status}) — wait a minute, then try once more.`)
-    }
-    return res.text()
+/**
+ * Fetch an itch.io page with the failure modes translated for the model.
+ * Goes through Electron's net.fetch (Chromium's network stack), NOT Node's
+ * global fetch: itch.io sits behind Cloudflare, which fingerprints Node/undici
+ * TLS and answers HTTP 403 no matter what the headers claim (seen live —
+ * identical requests: undici 403, Chromium/curl 200).
+ */
+async function fetchItchPage(url: string): Promise<string> {
+  const res = await net.fetch(url, {
+    signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS),
+    headers: { accept: 'text/html' }
   })
-
-  // Upstream failure pages arrive as HTTP 200 markdown (both observed live).
-  if (markdown.includes('Target URL returned error 429')) {
+  if (res.url.includes('/login')) {
     throw new Error(
-      'itch.io is rate-limiting searches right now. Wait a minute or two, then try ONE more search — do not retry immediately.'
+      'itch.io redirected this route to its login page, so it is not anonymously accessible. Suggest the user ' +
+        'browse https://itch.io/game-assets/free in their browser and paste the page URL of an asset they like — ' +
+        'itch_download works with any itch.io asset page URL.'
     )
   }
-  if (/Just a moment|Performing security verification/i.test(markdown)) {
+  if (res.status === 429) {
+    throw new Error(
+      'itch.io is rate-limiting requests right now. Wait a minute or two, then try ONE more search — do not retry immediately.'
+    )
+  }
+  if (!res.ok) {
+    throw new Error(`itch.io returned HTTP ${res.status} — wait a minute, then try once more.`)
+  }
+  const html = await res.text()
+  if (/Just a moment|Performing security verification/i.test(html)) {
     throw new Error(
       'itch.io served a bot-verification page instead of results. Try again in a few minutes; the user can also browse https://itch.io/game-assets/free directly.'
     )
   }
+  return html
+}
 
-  const results = parseSearchResults(markdown)
+interface Facet {
+  kind: 'tag' | 'genre'
+  slug: string
+}
+
+let tagVocabulary: { fetched: number; bySlug: Map<string, Facet> } | null = null
+
+/**
+ * itch.io's asset-tag vocabulary, keyed by URL slug AND by slugified display
+ * name ("Pixel Art" → pixel-art) so query phrases match either form. On fetch
+ * failure returns the stale copy (or an empty map — search then degrades to
+ * the unfiltered popular page plus relevance ranking) without caching, so the
+ * next search retries.
+ */
+async function tagFacets(): Promise<Map<string, Facet>> {
+  if (tagVocabulary && Date.now() - tagVocabulary.fetched < TAG_VOCAB_TTL_MS) return tagVocabulary.bySlug
+  try {
+    const raw = await throttledSearch(() => fetchItchPage('https://itch.io/tags.json?classification=assets&format=browse'))
+    const parsed = JSON.parse(raw) as { tags?: Array<{ name?: string; url?: string }> }
+    const bySlug = new Map<string, Facet>()
+    for (const tag of parsed.tags ?? []) {
+      const match = /^\/(tag|genre)-([a-z0-9-]+)$/.exec(tag.url ?? '')
+      if (!match) continue
+      const facet: Facet = { kind: match[1] as Facet['kind'], slug: match[2] }
+      bySlug.set(facet.slug, facet)
+      if (tag.name) bySlug.set(slugify(tag.name), facet)
+    }
+    if (bySlug.size > 0) tagVocabulary = { fetched: Date.now(), bySlug }
+    return bySlug
+  } catch {
+    return tagVocabulary?.bySlug ?? new Map()
+  }
+}
+
+function slugify(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/['’]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+}
+
+/** A slug, its plural, or its singular — tags mix both ("Sprites", "Forest"). */
+function lookupFacet(vocabulary: Map<string, Facet>, slug: string): Facet | undefined {
+  return (
+    vocabulary.get(slug) ??
+    vocabulary.get(`${slug}s`) ??
+    (slug.endsWith('s') ? vocabulary.get(slug.slice(0, -1)) : undefined)
+  )
+}
+
+/**
+ * Greedily match the query's words — longest phrase first, so "pixel art"
+ * becomes the pixel-art tag rather than two misses — into itch.io facets,
+ * then pick the ONE the browse URL may carry (see the section comment).
+ * Later matches win and tags beat genres: queries tend to read
+ * style → subject → format ("pixel art fox forest tileset"), so the last tag
+ * is usually the most specific filter. Every other word — matched or not —
+ * becomes a relevance-ranking term.
+ */
+function matchQuery(
+  words: string[],
+  vocabulary: Map<string, Facet>
+): { primary: Facet | undefined; terms: string[] } {
+  const matches: Array<{ facet: Facet; start: number; length: number }> = []
+  let i = 0
+  while (i < words.length) {
+    let advanced = 0
+    for (const window of [3, 2, 1]) {
+      if (i + window > words.length) continue
+      const facet = lookupFacet(vocabulary, words.slice(i, i + window).join('-'))
+      if (facet) {
+        matches.push({ facet, start: i, length: window })
+        advanced = window
+        break
+      }
+    }
+    i += advanced || 1
+  }
+  const tags = matches.filter((m) => m.facet.kind === 'tag')
+  const primary = (tags.length > 0 ? tags : matches).at(-1)
+  const terms = words.filter(
+    (_, index) => !(primary && index >= primary.start && index < primary.start + primary.length)
+  )
+  return { primary: primary?.facet, terms }
+}
+
+function browseUrl(facet?: Facet): string {
+  return facet ? `${BROWSE_BASE}/${facet.kind}-${facet.slug}` : BROWSE_BASE
+}
+
+export async function searchItchAssets(query: string): Promise<string> {
+  const q = query.trim()
+  if (!q) throw new Error('Provide a non-empty search query.')
+
+  const words = q
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean)
+  const { primary, terms } = matchQuery(words, await tagFacets())
+
+  let facet = primary
+  let html = await throttledSearch(() => fetchItchPage(browseUrl(facet)))
+  let results = parseBrowseResults(html)
+  if (results.length === 0 && facet) {
+    // A valid tag with no free assets — fall back to the unfiltered popular
+    // list and let ranking do what it can.
+    facet = undefined
+    html = await throttledSearch(() => fetchItchPage(browseUrl()))
+    results = parseBrowseResults(html)
+  }
   if (results.length === 0) {
-    return (
-      'Could not parse structured results from the itch.io search page. Raw page markdown (truncated) follows — ' +
-      'extract any https://<author>.itch.io/<name> asset links yourself:\n\n' +
-      markdown.slice(0, RAW_FALLBACK_CHARS)
+    // The unfiltered browse page always lists assets, so zero cells means the
+    // page markup changed and the parser needs updating.
+    throw new Error(
+      "Could not read any results from itch.io's browse page — its layout may have changed. Tell the user " +
+        'plainly; they can browse https://itch.io/game-assets/free themselves and paste an asset page URL, ' +
+        'which itch_download accepts directly.'
     )
   }
-  const list = results.map((r, i) => `${i + 1}. [${r.title}](${r.url}) — by ${r.author}`).join('\n')
+
+  const ranked = rankResults(results, terms).slice(0, MAX_RESULTS)
+  const filterNote = facet ? `, filtered by itch.io ${facet.kind} "${facet.slug}"` : ''
+  const list = ranked
+    .map((r, i) => `${i + 1}. [${r.title}](${r.url}) — by ${r.author}${r.description ? ` — ${r.description}` : ''}`)
+    .join('\n')
   return (
-    `Found ${results.length} free itch.io assets for "${q}":\n\n${list}\n\n` +
+    `Found ${ranked.length} free itch.io asset packs for "${q}" (most popular first${filterNote}):\n\n${list}\n\n` +
     'Relay this numbered list to the user VERBATIM (markdown links intact — they are clickable) and ask which option they want. ' +
     "Include this disclaimer: each asset has its own license — check the asset's itch.io page for usage and attribution rules " +
     'before shipping the game with it. Only call itch_download after the user picks.'
@@ -106,36 +242,68 @@ interface SearchResult {
   title: string
   author: string
   url: string
+  description: string
 }
 
 /**
- * Game pages are the only links of shape https://<author>.itch.io/<name> on
- * the results page (thumbnails live on img.itch.zone, site chrome on bare
- * itch.io), so matching that host shape finds exactly the result entries.
- * Image markdown is stripped first because thumbnails arrive as nested links
- * — [![…](img)](page) — whose page URL would otherwise be missed; their empty
- * titles fall back to the page slug and are upgraded when the plain text-title
- * link for the same page shows up.
+ * Order results by how many ranking terms (query words that didn't become
+ * facets, minus stopwords) appear in title+description; ties keep itch.io's
+ * popularity order. With no usable terms the page order stands.
  */
-function parseSearchResults(markdown: string): SearchResult[] {
-  const withoutImages = markdown.replace(/!\[[^\]]*\]\([^)]*\)/g, '')
-  const re = /\[([^\]]*)\]\(https:\/\/([a-z0-9][a-z0-9-]*)\.itch\.io\/([a-z0-9][a-z0-9_-]*)\/?(?:[?#][^)]*)?\)/gi
-  const seen = new Map<string, SearchResult>()
-  for (const match of withoutImages.matchAll(re)) {
-    const [, rawTitle, authorRaw, nameRaw] = match
-    const author = authorRaw.toLowerCase()
-    const name = nameRaw.toLowerCase()
-    if (author === 'www') continue
-    const url = `https://${author}.itch.io/${name}`
-    const title = rawTitle.replace(/\s+/g, ' ').trim()
-    const existing = seen.get(url)
-    if (existing) {
-      if (title && existing.title === name) existing.title = title
-    } else if (seen.size < MAX_RESULTS) {
-      seen.set(url, { title: title || name, author, url })
-    }
+function rankResults(results: SearchResult[], terms: string[]): SearchResult[] {
+  const usable = [...new Set(terms.filter((t) => !RANKING_STOPWORDS.has(t)))]
+  if (usable.length === 0) return results
+  return results
+    .map((result, index) => {
+      const haystack = `${result.title} ${result.description}`.toLowerCase()
+      const score = usable.filter((t) => haystack.includes(t) || (t.endsWith('s') && haystack.includes(t.slice(0, -1)))).length
+      return { result, score, index }
+    })
+    .sort((a, b) => b.score - a.score || a.index - b.index)
+    .map((entry) => entry.result)
+}
+
+const NAMED_ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' }
+
+function decodeEntities(text: string): string {
+  return text
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex: string) => String.fromCodePoint(parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_, dec: string) => String.fromCodePoint(Number(dec)))
+    .replace(/&(amp|lt|gt|quot|apos|nbsp);/g, (_, name: string) => NAMED_ENTITIES[name])
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+/**
+ * Each result on a browse page is a `game_cell` div holding a
+ * `<a class="title game_link" href="https://<author>.itch.io/<name>">Title</a>`,
+ * an optional `game_text` blurb, and a `game_author` link with the author's
+ * display name. Splitting on the cell-open tag keeps exactly one result per
+ * chunk (the similarly named game_cell_tools/game_cell_data classes never
+ * start a cell div). The strict URL-shape check keeps anything unexpected out.
+ */
+function parseBrowseResults(html: string): SearchResult[] {
+  const results: SearchResult[] = []
+  for (const cell of html.split(/<div [^>]*class="game_cell[\s"]/).slice(1)) {
+    const anchor =
+      /<a\b[^>]*href="(https:\/\/[a-z0-9][a-z0-9-]*\.itch\.io\/[a-z0-9][a-z0-9_-]*)\/?"[^>]*class="[^"]*\btitle\b[^"]*"[^>]*>([^<]+)<\/a>/i.exec(
+        cell
+      ) ??
+      /<a\b[^>]*class="[^"]*\btitle\b[^"]*"[^>]*href="(https:\/\/[a-z0-9][a-z0-9-]*\.itch\.io\/[a-z0-9][a-z0-9_-]*)\/?"[^>]*>([^<]+)<\/a>/i.exec(
+        cell
+      )
+    if (!anchor) continue
+    const url = anchor[1].toLowerCase()
+    const author = /class="game_author"><a\b[^>]*>([^<]+)<\/a>/i.exec(cell)
+    const description = /class="game_text"[^>]*>([^<]*)</i.exec(cell)
+    results.push({
+      title: decodeEntities(anchor[2]),
+      url,
+      author: author ? decodeEntities(author[1]) : new URL(url).hostname.split('.')[0],
+      description: description ? decodeEntities(description[1]) : ''
+    })
   }
-  return [...seen.values()]
+  return results
 }
 
 // ---------------------------------------------------------------------------

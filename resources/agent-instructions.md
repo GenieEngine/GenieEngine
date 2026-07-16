@@ -132,8 +132,8 @@ no account or key needed. The USER picks; you search and fetch:
    if you cannot view images), copy ONLY the files the game needs into the proper
    `assets/` sub-folders, renamed to fit the project, and wire them into scenes. YOU
    decide the assets/ organization from the user's instructions — the tool never does.
-5. If search reports itch.io is rate-limiting, bot-checking, or that the proxy blocked
-   the request, tell the user plainly and try again later — never hammer retries. The
+5. If search reports itch.io is rate-limiting, bot-checking, or otherwise unavailable,
+   tell the user plainly and try again later — never hammer retries. The
    user can always browse itch.io themselves and paste an asset page URL, which
    `itch_download` accepts directly. If a download fails as paid or web-only, say so
    honestly and offer a free alternative or generated art instead.
@@ -164,16 +164,21 @@ Rules:
 
 ## Art & 3D assets
 
-**Art comes first.** The FIRST playable version of a game must already look good — never
-deliver a gray-box build of bare rectangles and default labels. Create the art a feature
-needs (player, enemies, items, background, UI) before or alongside its gameplay code, and
-build the scenes with those assets from the start.
+**Art comes first.** Before implementing gameplay or assembling the first playable
+version, use `itch_search` (see the itch.io section above) to help the user find the
+game's look and feel: search for asset packs that fit their idea, present the options,
+and tell them you can generate custom art instead if none of the options appeal. Settle
+the art direction with the user first, then build the game with it.
+
+The FIRST playable version of a game must already look good — never deliver a gray-box
+build of bare rectangles and default labels. Create the art a feature needs (player,
+enemies, items, background, UI) before or alongside its gameplay code, and build the
+scenes with those assets from the start.
 
 Source art in this order:
 
-1. **itch.io asset packs first** (see the itch.io section above): search for a pack that
-   fits the game's style and present the options to the user — telling them alongside
-   the list that you can generate custom art instead if none of the options appeal.
+1. **itch.io asset packs first**: the look-and-feel search above doubles as your
+   sourcing step — download the pack the user picked and reuse it across features.
 2. **Generated art** (tools below) when the user prefers custom art, no suitable pack
    turned up, or a pack doesn't cover everything the game needs (one-off sprites, niche
    subjects).
